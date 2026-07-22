@@ -1,0 +1,28 @@
+{
+  "$schema": "https://code.claude.com/schemas/marketplace.json",
+  "name": "colibri-marketplace",
+  "description": "Nexusmill plugin marketplace.",
+  "owner": {
+    "name": "Nexusmill"
+  },
+  "plugins": [
+    {
+      "name": "colibri-review",
+      "source": "./plugins/colibri-review",
+      "description": "A rigorous, context-aware code review & debug protocol: one file at a time, context before code, and adversarial verification of every finding before it ships.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Nexusmill"
+      },
+      "license": "MIT",
+      "keywords": [
+        "code-review",
+        "debugging",
+        "code-quality",
+        "audit",
+        "security-review",
+        "static-analysis"
+      ]
+    }
+  ]
+}
