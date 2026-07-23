@@ -29,6 +29,11 @@ context, project records, and a verification pass.
   an earlier read. Record `sha256` of the exact bytes reviewed.
 - **Cache check:** if a prior review for this file+mode at the same sha exists (see the review store
   in Phase 4), do NOT re-review — report the existing one unless explicitly forced.
+- **Stale-file DELTA (file changed since its last review):** load the prior review and review
+  AGAINST it — report ONLY findings that are new or changed, and close the loop on the old ones
+  under a `## Fixed since last review` heading (fixed, still-open, or verified-stale). Never
+  restate an unchanged finding as if it were new; convergence rounds must get cheaper each
+  pass, not re-litigate the last one.
 - **Remediation check:** if the project keeps a remediation log / fixed-issues record, load it.
   Findings already closed there are excluded up front; a finding that turns out to target
   already-fixed code is recorded `verified-stale` with evidence, never "re-fixed" (fabricating a fix
@@ -105,7 +110,9 @@ Same laws + the debug ladder, in order, no skipping:
   header: source path · reviewer (model/tool id) · sha256 · date · mode · one-line context-pack
   summary (what was consulted).
 - Update `.colibri_reviews/_manifest.json` (per file → per mode → `{sha, output, reviewed_at,
-  tokens_in/out if known, cost}`). This is the sha-keyed cache Phase 0 checks.
+  tokens_in/out if known, cost}`). This is the sha-keyed cache Phase 0 checks. Write it
+  ATOMICALLY (tmp → os.replace): a corrupted manifest silently resets the whole project's
+  review cache and every file re-reviews as "new".
 - Multi-file jobs end with ONE synthesis section (cross-file findings, ranked) after all per-file
   units — never instead of them.
 - Repo work → commit per your project's convention (e.g. `review(scope):` or `fix(scope):`), with
