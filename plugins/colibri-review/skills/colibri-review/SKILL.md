@@ -1,6 +1,6 @@
 ---
 name: colibri-review
-description: A rigorous, context-aware protocol for ALL code review and debugging. Use whenever asked to review code, audit a file, hunt bugs, check code quality, propose features for a module, debug a failure, investigate an error, or fix a reported defect — in any repo, any language. Reviews one file at a time, assembles repo context before judging, and adversarially verifies every finding before it ships. Never review or debug ad hoc: load this skill first and follow it to the letter.
+description: A rigorous, context-aware protocol for ALL code review and debugging. Use whenever asked to review code, audit a file, hunt bugs, check code quality, propose features for a module, check code against a spec or stated expectations, plan the remediation of known findings, debug a failure, investigate an error, or fix a reported defect — in any repo, any language. Reviews one file at a time, assembles repo context before judging, and adversarially verifies every finding before it ships. Never review or debug ad hoc: load this skill first and follow it to the letter.
 ---
 
 # Colibri Review — a context-aware code review & debug protocol
@@ -10,7 +10,10 @@ findings with exact line numbers, and sha-keyed caching so unchanged files are n
 In practice a capable model with full repo context matches or beats a paid blind single-file
 reviewer, so the blind external call is demoted to an optional second opinion. What replaces it is
 this: the same discipline, PLUS everything a blind single-file reviewer can never have — repo
-context, project records, and a verification pass.
+context, project records, and a verification pass. v0.2.0 imports the console's two newer review
+types — **Spec Conformance** (code vs the maintainer's stated expectations) and **Remediation
+Plan** (plans only, never executes) — plus the commit-gate discipline learned running them in
+production.
 
 **The three laws** (violating any one voids the review):
 1. **One file per review unit.** Depth beats breadth. A multi-file task is a sequence of
@@ -76,6 +79,40 @@ with short before/after); `## Quick wins`; `## What's done well`.
 Output: `## What this module does`; `## Suggested add-ons` (Value High/Med/Low · Effort S/M/L,
 What/Why/How with hook points); `## Nice-to-haves`.
 
+**spec — Spec Conformance** — persona: conformance reviewer judging the file against the
+maintainer's AUTHORITATIVE feature expectations; the contract travels in the review itself. Report
+ONLY divergences between the code and the stated expectations. Quote the violated clause for every
+finding. Never critique the expectations themselves, and never report unrelated generic bugs (bug
+mode owns those). Check the quiet clauses hardest — disabled/greyed states, error paths, sentinels,
+cost disclosure before spend, side effects, wrap/boundary behavior, "changes nothing else"
+guarantees. A clause the code satisfies gets silence. Output:
+```
+## Verdict
+## Divergences        (worst first: quoted Expectation · Trigger · actual Behavior · Fix)
+## UNJUDGEABLE HERE   (one line per clause whose behavior lives outside this file, naming where it likely lives)
+```
+- **No contract, no spec review.** Without expectations the correct output is a request for them,
+  not a guess. If asked to establish the spec: author a DRAFT registry (plain contract text, or
+  JSON rows — `id`, `label`, `contract` groups such as expected / error_paths / side_effects /
+  disabled_state / cost) marked PROVISIONAL for the maintainer's ruling — never judge against a
+  contract you silently invented.
+- **Clause craft:** one observable behavior per clause; state trigger → observable outcome (output
+  text, exit code, file bytes, UI state — if you can't name the observable, it's an intention, not
+  a spec); write the quiet clauses deliberately; spec the outcome, not the mechanism (mechanisms
+  refactor, contracts persist); scope each registry to one surface and dispatch per-file packs;
+  when behavior deliberately changes, update the stale clause in the SAME commit as the change — a
+  stale "changes nothing else" clause produces false CONFIRMED divergences.
+
+**plan — Remediation Plan** — persona: senior staff engineer who PLANS ONLY and never executes;
+someone else carries the plan out later under strict TDD. Scope: the few most load-bearing real
+defects — or, when a prior review is supplied, EXACTLY its still-open findings (no re-litigating, no
+expanding, no dropping). Every item carries: Objective · Root cause (line/symbol) · Fix design
+(smallest change, the exact edit sketched) · **Test first** (the failing test to write BEFORE the
+fix) · Steps · Verification (commands + expected outcomes) · Risk & rollback. End with
+`## Execution order & batching` in commit-sized tranches. House law: the plan is archived and
+executed in a SEPARATE tranche — a plan is never treated as a fix, and no fix is ever claimed from
+having written one.
+
 **Context-aware checks (mandatory additions in every mode — the reason this beats a blind review):**
 - Cross-file contract breaks: caller passes X, this file assumes Y (cite BOTH sites).
 - Duplication of logic that already exists elsewhere in the repo (name the twin).
@@ -92,6 +129,9 @@ Then mark it:
   "unverified because ..." note. Never present as confirmed.
 - Refuted → DELETE (silently; a deleted wrong finding is a success, not a loss).
 Static-analysis inputs (linters etc.) are hints, never findings, until traced.
+Spec findings are candidates, not verdicts — same adversarial pass, cross-checked against the
+remediation log — and an `UNJUDGEABLE HERE` row (the clause's behavior lives in another file) is a
+CORRECT answer that routes the clause to its owner, not a failure to judge.
 
 ## Phase D — Debug modality (when hunting a specific failure, not reviewing)
 Same laws + the debug ladder, in order, no skipping:
@@ -117,14 +157,21 @@ Same laws + the debug ladder, in order, no skipping:
   units — never instead of them.
 - Repo work → commit per your project's convention (e.g. `review(scope):` or `fix(scope):`), with
   the remediation-log entry in the SAME commit as the fix.
+- If the repo's commits run through a mandatory adversarial review gate (armed `.githooks/`), the
+  closing commit goes through it — the gate's findings are review to address, never an obstacle to
+  route around (`--no-verify` and plumbing commits are not options).
 
 ## External second opinions (demoted, optional)
 A paid external reviewer (another model / API) is permitted ONLY as a second opinion after the
 in-session review exists, sending the CURRENT on-disk bytes, and disclosing the cost BEFORE the
 call. Its findings enter the report only after passing Phase 3 verification. It is never the
-primary reviewer.
+primary reviewer. (The colibri console and the grok-review / hy4-review headless CLIs speak all
+five modes, including spec with `--spec` and plan with `--findings`.)
 
 ## Non-negotiables recap
 One file at a time · context pack first · code-intelligence tooling over ad-hoc text search ·
-current bytes + sha recorded · project records consulted before and updated after · every finding
-CONFIRMED or labeled PLAUSIBLE · debug = reproduce → hypothesize → verify → log · commit at close.
+current bytes + sha recorded · project records consulted before and updated after · five modes —
+bug / quality / feature / spec / plan · every finding CONFIRMED or labeled PLAUSIBLE · spec =
+contract in, divergences only, unjudgeable named, never a self-invented contract · plan =
+test-first and never executed by its author · debug = reproduce → hypothesize → verify → log ·
+commit at close, through any armed gate.

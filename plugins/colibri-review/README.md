@@ -9,15 +9,20 @@ finding** before it ships. A finding that can't be traced end-to-end is deleted,
 ## What it does
 
 When you ask Claude to review code, audit a file, hunt bugs, check quality, propose features for a
-module, debug a failure, investigate an error, or fix a reported defect, this plugin's skill kicks
+module, check code against a spec or stated expectations, plan the remediation of known findings,
+debug a failure, investigate an error, or fix a reported defect, this plugin's skill kicks
 in and runs the protocol:
 
 1. **Scope & freshness** — pick the file, read its *current* bytes, record a sha, and skip anything
    already reviewed at that sha or already fixed in your remediation log.
 2. **Context pack** — map the file's symbols and call sites (via whatever code-intelligence tooling
    you have), pull relevant project docs/decisions, and check what changed recently.
-3. **Review pass** — `bug`, `quality`, or `feature` mode, each with a strict output contract and
-   exact line numbers.
+3. **Review pass** — one of five modes, each with a strict output contract and
+   exact line numbers: `bug` (real defects, no style padding), `quality` (long-term health),
+   `feature` (grounded add-on ideas), `spec` (conformance against the maintainer's stated
+   expectations — divergences only, quiet clauses checked hardest, cross-file clauses named as
+   UNJUDGEABLE HERE instead of guessed), and `plan` (test-first remediation plans that are never
+   executed by their author).
 4. **Adversarial verification** — every draft finding must be traced through the real code path and
    marked CONFIRMED or PLAUSIBLE, or it's dropped.
 5. **Persist & close** — write the review to `.colibri_reviews/`, update the sha-keyed cache, and
