@@ -1,0 +1,17 @@
+#!/bin/sh
+# MANDATORY adversarial review gate (Damien 2026-08-30). Do not remove.
+# ARMED PER-CLONE: run  git config core.hooksPath .githooks  once per working
+# copy (git cannot ship config, so a FRESH CLONE IS UNARMED until that one-liner
+# runs - see TOOLS_MANIFEST.md in the Nexusmill Tools repo). Once armed, this is
+# DELIBERATELY fail-closed: if the gate tool is missing, ALL commits are refused
+# until a human installs the Tools repo or consciously unsets core.hooksPath.
+GATE="C:/Users/User/source/repos/Tools/adversary-gate/adversary_gate.py"
+PYBIN="C:/Users/User/AppData/Local/Programs/Python/Python311/python.exe"
+[ -x "$PYBIN" ] || PYBIN=python
+if [ ! -f "$GATE" ]; then
+  echo "ADVERSARY GATE: tool not found at $GATE - failing CLOSED." >&2
+  echo "Install the Nexusmill Tools repo there, or consciously run:" >&2
+  echo "  git config --unset core.hooksPath   (this is an audited decision)" >&2
+  exit 1
+fi
+exec "$PYBIN" "$GATE" check

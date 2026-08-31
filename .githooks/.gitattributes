@@ -1,0 +1,5 @@
+pre-commit text eol=lf
+post-commit text eol=lf
+pre-push text eol=lf
+adversary_audit.py text eol=lf
+adversary_baseline text eol=lf

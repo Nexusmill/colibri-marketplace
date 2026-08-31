@@ -1,0 +1,25 @@
+# G39 layer 4: server-side audit of the adversarial commit gate.
+# Every post-baseline commit that changes code must carry a durable note on
+# refs/notes/adversary (written by adversary_gate.py record) whose sha256s match the
+# committed blobs. Push the notes with the branch:  git push origin refs/notes/adversary
+# The auditor is vendored into .githooks/ by install_gate.py so this job needs no
+# external tooling. This file lives under .github/workflows/ and is therefore itself
+# GATED code - the gate refuses commits editing it without an independent CLEAR.
+name: adversary-audit
+# push only, deliberately: a pull_request run checks out GitHub's SYNTHETIC merge commit
+# (refs/pull/N/merge), which is created server-side and can never carry a note - the
+# auditor would flag every PR as a violation. Push runs report the check on the real
+# head sha, which is what required status checks match.
+on:
+  push:
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch adversary notes
+        run: git fetch origin +refs/notes/adversary:refs/notes/adversary || echo "no adversary notes ref on origin - unnotarized code commits will fail below"
+      - name: Audit history against adversary notes
+        run: python3 .githooks/adversary_audit.py --repo .

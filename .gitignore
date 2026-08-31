@@ -3,3 +3,4 @@ Thumbs.db
 .colibri_reviews/
 __pycache__/
 *.pyc
+.adversary/

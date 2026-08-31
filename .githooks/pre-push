@@ -1,0 +1,14 @@
+#!/bin/sh
+# Adversary gate PUSH GUARD (G39, owner order 2026-08-31: notes are MANDATORY).
+# Do not remove. Refuses pushing any branch whose outgoing commits carry
+# un-notarized code, then pushes refs/notes/adversary to the same remote so the
+# durable evidence always travels with the history. Fail-closed like the
+# pre-commit wall: if the gate tool is missing, the push is refused.
+GATE="C:/Users/User/source/repos/Tools/adversary-gate/adversary_gate.py"
+PYBIN="C:/Users/User/AppData/Local/Programs/Python/Python311/python.exe"
+[ -x "$PYBIN" ] || PYBIN=python
+if [ ! -f "$GATE" ]; then
+  echo "ADVERSARY PUSH GUARD: tool not found at $GATE - refusing the push (fail-closed)." >&2
+  exit 1
+fi
+exec "$PYBIN" "$GATE" check-push "$1"

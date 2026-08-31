@@ -1,0 +1,16 @@
+#!/bin/sh
+# Adversary gate NOTARIZATION hook (G39 layer 3, Damien 2026-08-31). Do not remove.
+# Runs AFTER every commit: converts the transient clearance (.adversary/clearance.json)
+# into a durable git note on refs/notes/adversary that the audit tripwire and CI verify.
+# It cannot block a commit - the ABSENCE of a note is exactly the tripwire signal - so a
+# missing tool here only WARNS. The pre-commit gate remains the fail-closed wall.
+# Push notes with the branch: git push origin refs/notes/adversary
+GATE="C:/Users/User/source/repos/Tools/adversary-gate/adversary_gate.py"
+PYBIN="C:/Users/User/AppData/Local/Programs/Python/Python311/python.exe"
+[ -x "$PYBIN" ] || PYBIN=python
+if [ ! -f "$GATE" ]; then
+  echo "ADVERSARY NOTARY: tool not found at $GATE - commit NOT notarized; the audit tripwire will flag it." >&2
+  exit 0
+fi
+"$PYBIN" "$GATE" record || echo "ADVERSARY NOTARY: commit NOT notarized - the audit tripwire will flag it." >&2
+exit 0
