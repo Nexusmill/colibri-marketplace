@@ -149,8 +149,12 @@ Same laws + the debug ladder, in order, no skipping:
 - Write the review to `.colibri_reviews/<rel path with separators as __>__<mode>__<sha8>.md` with a
   header: source path · reviewer (model/tool id) · sha256 · date · mode · one-line context-pack
   summary (what was consulted).
-- Update `.colibri_reviews/_manifest.json` (per file → per mode → `{sha, output, reviewed_at,
-  tokens_in/out if known, cost}`). This is the sha-keyed cache Phase 0 checks. Write it
+- Update `.colibri_reviews/_manifest.json` in the EXACT canonical row shape — consumers
+  iterate `entry["modes"]` and anything else is silently invisible: `"<ABSOLUTE file
+  path>": {"rel": "<repo-relative path>", "modes": {"<mode>": {"sha": ..., "output": ...,
+  "reviewed_at": ..., tokens_in/out if known, "cost": ...}}}`. Never mode keys at the
+  entry's top level, never a relative-path key, never a second entry for a file that has
+  one (fold into its `modes`). This is the sha-keyed cache Phase 0 checks. Write it
   ATOMICALLY (tmp → os.replace): a corrupted manifest silently resets the whole project's
   review cache and every file re-reviews as "new".
 - Multi-file jobs end with ONE synthesis section (cross-file findings, ranked) after all per-file

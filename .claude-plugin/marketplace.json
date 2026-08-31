@@ -31,7 +31,7 @@
       "name": "colibri-review",
       "source": "./plugins/colibri-review",
       "description": "A rigorous, context-aware code review & debug protocol: one file at a time, context before code, adversarially verified findings, five modes — bug, quality, feature, spec conformance, remediation plan.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": {
         "name": "Nexusmill"
       },
