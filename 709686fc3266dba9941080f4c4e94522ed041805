@@ -1,0 +1,52 @@
+{
+ "type": "CLEAR",
+ "commit": "709686fc3266dba9941080f4c4e94522ed041805",
+ "when": "20260831-084004",
+ "files": {
+  ".githooks/.gitattributes": {
+   "sha": "77a9a685825b85360cf7b129be4ad5c349d48eaa36d2d3bc2a1eb1b7724deec4",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-084003",
+   "artifact": ".adversary\\reviews\\gate_20260831-084003.md"
+  },
+  ".githooks/adversary_audit.py": {
+   "sha": "28ebdc7b4162c932308fa70d1c249d57f04ce7d5954cd544fe1fbce03e9426db",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-084003",
+   "artifact": ".adversary\\reviews\\gate_20260831-084003.md"
+  },
+  ".githooks/adversary_baseline": {
+   "sha": "5c018f20bd57243cadb8c3579a93b5b3b3164eb9f4ae2f704553b0e0e134b07d",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-084003",
+   "artifact": ".adversary\\reviews\\gate_20260831-084003.md"
+  },
+  ".githooks/post-commit": {
+   "sha": "dfafd5a0b39aced4410f1595ed834d1be6adac89dac991ebdc01db31315ec2eb",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-084003",
+   "artifact": ".adversary\\reviews\\gate_20260831-084003.md"
+  },
+  ".githooks/pre-commit": {
+   "sha": "be7efd2abd2fd5003bf164f27044b08a1d6d3f79306c0e31852eb6f9fb8527f4",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-084003",
+   "artifact": ".adversary\\reviews\\gate_20260831-084003.md"
+  },
+  ".githooks/pre-push": {
+   "sha": "be0618d50ad767f6c748da08843cd2af97de9404c0b21d4221c15bf076162ea3",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-084003",
+   "artifact": ".adversary\\reviews\\gate_20260831-084003.md"
+  },
+  ".github/workflows/adversary-audit.yml": {
+   "sha": "1948b3581eed637f3bc1642e82ce8f5c2db422b49b5fb1913c3fff83a01c6eb8",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-084003",
+   "artifact": ".adversary\\reviews\\gate_20260831-084003.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260831-084003.md": "model: z-ai/glm-5.2 | usage: {'prompt_tokens': 8108, 'completion_tokens': 21143, 'total_tokens': 29251, 'cost': 0.0521902, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0521902, 'upstream_inference_prompt_cost': 0.0056756, 'upstream_inference_completions_cost': 0.0465146}, 'completion_tokens_details': {'reasoning_tokens': 20469, 'image_tokens': 0, 'audio_tokens': 0}} | files: ['.githooks/.gitattributes', '.githooks/adversary_audit.py', '.githooks/adversary_baseline', '.githooks/post-commit', '.githooks/pre-commit', '.githooks/pre-push', '.github/workflows/adversary-audit.yml']\n\nI've audited this change as if I were the gate's adversary: traced the auditor's diff-parsing against real `git diff --name-status -M` output shapes, checked the note/SHA contract end-to-end, the baseline/CI flow, the shim paths, and the `.gitignore`/`.gitattributes` interactions.\n\nKey things I verified and found sound:\n- `_changed_code` diff parser: `A/C/M` via `st in \"ACM\"`, `R<n>` with 3 fields handled (new\u2192code records new path; old-code\u2192new-noncode records `D:old`; code\u2192code records only new path), `D` records `D:old` with parent blob sha. `blob_sha` uses `git show rev:path` (raw blob bytes = object DB content), matching what a byte-identical `record` would write. Root commit \u2192 `EMPTY_TREE` base, and `blob_sha(EMPTY_TREE,\u2026)` is never called (root has only `A`).\n- `_audit_commit`: no note \u2192 violation; bad JSON \u2192 violation; missing path or sha mismatch \u2192 violation; `type` not CLEAR/OVERRIDE \u2192 violation; OVERRIDE passes unless `--strict-override`. Internally consistent.\n- For THIS commit specifically, `changed` = the 7 paths under `.githooks/` + `.github/workflows/` (`.gitignore` is correctly NOT code: `os.path.splitext(\".gitignore\") == (\".gitignore\",\"\")`, not in `CODE_EXTS`, not under a gated prefix). The post-commit note records exactly those 7 shas; the auditor recomputes the same 7. Match \u2192 clean. No false violation on the arming commit.\n- Baseline `639fc\u202640` is self-checked by the auditor (`rev-parse --verify \u2026^{commit}`); a wrong baseline fails loudly with exit 2, not a silent false clean.\n- CI: `fetch-depth: 0` + explicit `git fetch origin +refs/notes/adversary:\u2026` makes notes available; missing notes ref \u2192 fail-closed violations. `on: push` (not `pull_request`) correctly avoids GitHub's synthetic merge ref.\n- `.githooks/.gitattributes` forces LF on the shell shims (prevents CRLF `#!/bin/sh` breakage on Windows checkout). Shims fail closed when the Tools path is absent (documented per-clone model); they only run on the dev box, not CI.\n- The unhandled `T` (typechange) status is a pre-existing canonical policy choice shared identically by gate `record` and auditor, so it causes no false violation and is not introduced/worsened by this deployment; out of scope per instructions.\n\nNo logic error, broken call site, state/ordering race, contract break, or safety/security defect introduced by the visible bytes.\n\nVERDICT: CLEAR"
+ }
+}
