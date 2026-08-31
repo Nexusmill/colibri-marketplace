@@ -6,7 +6,7 @@
 # pre-commit wall: if the gate tool is missing, the push is refused.
 GATE="C:/Users/User/source/repos/Tools/adversary-gate/adversary_gate.py"
 PYBIN="C:/Users/User/AppData/Local/Programs/Python/Python311/python.exe"
-[ -x "$PYBIN" ] || PYBIN=python
+[ -x "$PYBIN" ] || { command -v python3 >/dev/null 2>&1 && PYBIN=python3 || PYBIN=python; }
 if [ ! -f "$GATE" ]; then
   echo "ADVERSARY PUSH GUARD: tool not found at $GATE - refusing the push (fail-closed)." >&2
   exit 1
