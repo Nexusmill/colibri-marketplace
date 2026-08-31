@@ -1,0 +1,70 @@
+{
+ "type": "CLEAR",
+ "commit": "5ebe1df283da4b309c4d994f0b9125e995022a64",
+ "when": "20260831-101505",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "d89bd335d99d962d924a00fcc74ea6f486ff15fc23454a5a13961781ec4dce4a",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-101425",
+   "artifact": ".adversary\\reviews\\gate_20260831-101425.md"
+  },
+  "plugins/adversary-gate/.claude-plugin/plugin.json": {
+   "sha": "9882e376f7cccb70371b8f899d3ddce9f8cf7940311113cb99b50c449a203e9e",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-101425",
+   "artifact": ".adversary\\reviews\\gate_20260831-101425.md"
+  },
+  "plugins/adversary-gate/tools/adversary_audit.py": {
+   "sha": "28ebdc7b4162c932308fa70d1c249d57f04ce7d5954cd544fe1fbce03e9426db",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-101425",
+   "artifact": ".adversary\\reviews\\gate_20260831-101425.md"
+  },
+  "plugins/adversary-gate/tools/adversary_gate.py": {
+   "sha": "95377c65623727288a89a05d4c73812f4b86342a092b37b075885c577d1caf86",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-101425",
+   "artifact": ".adversary\\reviews\\gate_20260831-101425.md"
+  },
+  "plugins/adversary-gate/tools/audit_selftest.py": {
+   "sha": "0058dc658e08cbfae9133adcbacf6a2b4a325febdf24fc923cfc8709aa72528e",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-101425",
+   "artifact": ".adversary\\reviews\\gate_20260831-101425.md"
+  },
+  "plugins/adversary-gate/tools/gate_selftest.py": {
+   "sha": "ed518ea3ce67f8fa1fc256139678a8e91ba363dfd101db3f6ff22325784a4705",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-101425",
+   "artifact": ".adversary\\reviews\\gate_20260831-101425.md"
+  },
+  "plugins/adversary-gate/tools/guard_selftest.py": {
+   "sha": "f8f6152604814319beba3f87c92eff3b8f7b7ccc7a8c577fb0e7b99a06237834",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-101425",
+   "artifact": ".adversary\\reviews\\gate_20260831-101425.md"
+  },
+  "plugins/adversary-gate/tools/harness_guard.py": {
+   "sha": "379b2cdf45221adb11af14732871dca64d467657075b3262b740f04d2e26744a",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-101425",
+   "artifact": ".adversary\\reviews\\gate_20260831-101425.md"
+  },
+  "plugins/adversary-gate/tools/install_gate.py": {
+   "sha": "c193c68c904e6b85bc09e2682ba9d53591d99b16f0dc6df948256433f8361546",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-101425",
+   "artifact": ".adversary\\reviews\\gate_20260831-101425.md"
+  },
+  "plugins/adversary-gate/tools/install_selftest.py": {
+   "sha": "bceff87d63b76ebc4c5cea3ce25129846ae1977c00ee27895bee17d835b257c5",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-101425",
+   "artifact": ".adversary\\reviews\\gate_20260831-101425.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260831-101425.md": "model: z-ai/glm-5.2 | usage: {'prompt_tokens': 58399, 'completion_tokens': 17371, 'total_tokens': 75770, 'cost': 0.02978197274, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 51391, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.02978197274, 'upstream_inference_prompt_cost': 0.00692868514, 'upstream_inference_completions_cost': 0.0228532876}, 'completion_tokens_details': {'reasoning_tokens': 16887, 'image_tokens': 0, 'audio_tokens': 0}} | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/.claude-plugin/plugin.json', 'plugins/adversary-gate/tools/adversary_audit.py', 'plugins/adversary-gate/tools/adversary_gate.py', 'plugins/adversary-gate/tools/audit_selftest.py', 'plugins/adversary-gate/tools/gate_selftest.py', 'plugins/adversary-gate/tools/guard_selftest.py', 'plugins/adversary-gate/tools/harness_guard.py', 'plugins/adversary-gate/tools/install_gate.py', 'plugins/adversary-gate/tools/install_selftest.py']\n\nI reviewed every file in this change set against its own claims and the surrounding code. I checked:\n\n- **adversary_gate.py**: git fallback, clearance sha matching (staged `:path` vs committed `rev:path`), removal handling, override one-shot provenance, record fail-closed logic, push guard `--not` toggling (single `--not`, correct), notes push recursion guard, model retry/429 handling, empty-response fail-closed.\n- **adversary_audit.py**: parity with gate's code-path rules (CODE_EXTS, GATED_PREFIXES, EMPTY_TREE all identical), note verification logic, baseline handling, JSON output counts.\n- **harness_guard.py**: every BASH_RULES regex against the selftest matrix (block + pass), including `-n` cluster detection, `hookspath` negative lookahead, `.adversary` exemptions, `notes` mutating-subcommand filter, fail-open on malformed input.\n- **install_gate.py**: canonical shim substitution, GATE= regex, CRLF detection/repair, idempotency, baseline write-once, gitignore dedup, `.gitattributes` LF pins, fail-closed exit 3 path, relocation contract.\n- **Selftests**: traced each test scenario through the actual code paths to verify the assertions hold.\n- **Shell shims**: fail-closed on missing tool, PYBIN fallback chain.\n\nThe rebuttal's three fixes are verified present in the staged bytes: (1) `adversary_gate.py` GIT falls back to PATH, (2) refusal message uses `os.path.abspath(__file__)`, (3) selftests share the same GIT fallback.\n\nI found marginal gaps (e.g., `harness_guard.py` `--no-verify` pattern uses `[^\\n]*` so a literal newline in the command string could evade it; `hookspath` lookahead matches `.githooks.bak` because `\\b` falls between `s` and `.`), but these are in an explicitly optional layer whose gaps are caught by the audit tripwire (layer 3) and push guard \u2014 consistent with the documented threat model (\"detection is the guarantee, prevention is not claimed\"). No logic error, broken caller, unhandled path, or state/ordering race was found in the code the change introduces.\n\nVERDICT: CLEAR"
+ }
+}
