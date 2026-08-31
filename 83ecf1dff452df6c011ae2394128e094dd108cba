@@ -1,0 +1,22 @@
+{
+ "type": "CLEAR",
+ "commit": "83ecf1dff452df6c011ae2394128e094dd108cba",
+ "when": "20260831-171718",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "c1a390513d2c7be821729852c63dfc266f1bcb818339c8d8deea4d864086c54e",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-171717",
+   "artifact": ".adversary\\reviews\\gate_20260831-171717.md"
+  },
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "0b3f364ca81e094de39a58c74c14cd738b6e26543513d67aa88857b2c47140f4",
+   "model": "z-ai/glm-5.2",
+   "when": "20260831-171717",
+   "artifact": ".adversary\\reviews\\gate_20260831-171717.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260831-171717.md": "model: z-ai/glm-5.2 | usage: {'prompt_tokens': 2009, 'completion_tokens': 3636, 'total_tokens': 5645, 'cost': 0.00929126, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 192, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.00929126, 'upstream_inference_prompt_cost': 0.00129206, 'upstream_inference_completions_cost': 0.0079992}, 'completion_tokens_details': {'reasoning_tokens': 3001, 'image_tokens': 0, 'audio_tokens': 0}} | files: ['.claude-plugin/marketplace.json', 'plugins/colibri-review/.claude-plugin/plugin.json']\n\nAnalyzing the staged change:\n\n**Scope:** Version bump 0.2.0 \u2192 0.2.1 in two JSON manifests + a reworded Phase-4 manifest-update paragraph in `SKILL.md`. No executable code changed.\n\n**Checks performed:**\n\n1. **Version consistency across the two JSONs:** `marketplace.json` colibri-review `\"version\": \"0.2.1\"` and `plugins/colibri-review/.claude-plugin/plugin.json` `\"version\": \"0.2.1\"` \u2014 both bumped in lockstep. No third location in the diff retains `0.2.0` for this plugin (the `adversary-gate` entry remains `0.1.0`, correctly out of scope).\n\n2. **JSON well-formedness:** Both staged JSON files parse cleanly \u2014 balanced braces/brackets, valid string escapes (em-dash `\u2014` is fine in JSON UTF-8), no trailing commas, consistent description strings and keyword arrays between the two files.\n\n3. **SKILL.md prose change \u2014 internal consistency:** The new canonical row shape `\"<ABSOLUTE path>\": {\"rel\": \"...\", \"modes\": {\"<mode>\": {\"sha\", \"output\", \"reviewed_at\", tokens_in/out, \"cost\"}}}` is self-consistent: it preserves the original field set (`sha, output, reviewed_at, tokens_in/out if known, cost`) inside the mode dict, adds the `rel` field at the entry level, and the surrounding negative constraints (\"never mode keys at top level\", \"never a relative-path key\", \"never a second entry for a file \u2014 fold into `modes`\") directly contradict the prior failure mode the author attributes to COLIBRI-ARCHIVE-SCHEMA. The retained \"sha-keyed cache Phase 0 checks\" wording remains coherent: `sha` is the cache-validity field inside each mode entry, not the top-level key, so the phrase is loose-but-not-wrong.\n\n4. **Atomic-write guidance preserved:** `(tmp \u2192 os.replace)` and the corruption warning are unchanged from the prior text \u2014 no regression there.\n\n5. **Consumer contract claim:** The author asserts \"consumers iterate `entry[\"modes\"]`\". The normalizer/consumer source is not in the visible diff, so I cannot directly falsify this; nothing in the visible files contradicts it, and the rebuttal cites specific docket evidence (EV-013/EV-016). Per instructions, I weigh the rebuttal and do not re-raise a point it factually settles absent contradicting bytes.\n\n6. **No caller/call-site breakage:** This is a plugin skill (prose) + two metadata manifests. There is no function, import, schema validator, or runtime path touched that could break a caller.\n\n**Result:** No logic error, no broken caller, no schema/contract break visible in the provided files. Version bumps are consistent; JSONs validate; the SKILL.md change tightens (not loosens) the spec.\n\nVERDICT: CLEAR"
+ }
+}
