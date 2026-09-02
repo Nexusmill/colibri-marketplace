@@ -46,7 +46,11 @@ GIT = shutil.which("git") or r"C:\Program Files\Git\cmd\git.exe"
 
 
 def _git(repo, args, binary=False, check=True):
-    p = subprocess.run([GIT, "-C", repo] + args, capture_output=True)
+    # GIT_NO_REPLACE_OBJECTS: a local `git replace <dirty> <innocent>` otherwise makes
+    # diff/show read the substituted object graph, so the auditor would hash the innocent
+    # blob and pass a dirty commit (audit-probe finding). Ignore replace refs.
+    env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+    p = subprocess.run([GIT, "-C", repo] + args, capture_output=True, env=env)
     if check and p.returncode != 0:
         raise SystemExit("git %s failed: %s" % (" ".join(args[:2]),
                                                 p.stderr.decode("utf-8", "replace")[:300]))
@@ -70,22 +74,37 @@ def _changed_code(repo, rev):
         _, raw = _git(repo, ["show", r + ":" + path], binary=True)
         return hashlib.sha256(raw).hexdigest()
 
-    _, out = _git(repo, ["diff", "--name-status", "-M", base, rev])
+    # -z NUL parsing (non-ASCII paths are C-quoted otherwise -> silently skipped) + T
+    # typechange handling; mirrors adversary_gate._changed_code_in_commit exactly.
+    _, out = _git(repo, ["diff", "--name-status", "-M", "-z", base, rev])
+    toks = out.split("\0")
     files, removals = {}, {}
-    for line in out.splitlines():
-        bits = line.split("\t")
-        if not bits or not bits[0]:
+    i = 0
+    while i < len(toks):
+        st = toks[i]
+        if not st:
+            i += 1
             continue
-        st = bits[0][0]
-        if st in "ACM" and len(bits) >= 2 and _is_code(bits[1]):
-            files[bits[1]] = blob_sha(rev, bits[1])
-        elif st == "R" and len(bits) >= 3:
-            if _is_code(bits[2]):
-                files[bits[2]] = blob_sha(rev, bits[2])
-            if _is_code(bits[1]) and not _is_code(bits[2]):
-                removals["D:" + bits[1]] = blob_sha(base, bits[1])
-        elif st == "D" and len(bits) >= 2 and _is_code(bits[1]):
-            removals["D:" + bits[1]] = blob_sha(base, bits[1])
+        code = st[0]
+        if code in ("A", "C", "M", "T"):
+            path = toks[i + 1]
+            i += 2
+            if _is_code(path):
+                files[path] = blob_sha(rev, path)
+        elif code == "R":
+            old, new = toks[i + 1], toks[i + 2]
+            i += 3
+            if _is_code(new):
+                files[new] = blob_sha(rev, new)
+            if _is_code(old) and not _is_code(new):
+                removals["D:" + old] = blob_sha(base, old)
+        elif code == "D":
+            old = toks[i + 1]
+            i += 2
+            if _is_code(old):
+                removals["D:" + old] = blob_sha(base, old)
+        else:
+            i += 2
     files.update(removals)
     return files
 
