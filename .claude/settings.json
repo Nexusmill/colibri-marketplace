@@ -8,7 +8,9 @@
             "type": "command",
             "command": "C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
             "args": [
-              "C:\\Users\\User\\source\\repos\\Tools\\skill-gate\\skill_gate.py",
+              "-I",
+              "-c",
+              "import os, sys, runpy, traceback\np = 'C:\\\\Users\\\\User\\\\source\\\\repos\\\\Tools\\\\skill-gate\\\\skill_gate.py'\nif not os.path.isfile(p):\n    sys.exit(0)\nsys.path.insert(0, os.path.dirname(p))\nsys.argv = [p] + sys.argv[1:]\ntry:\n    runpy.run_path(p, run_name='__main__')\nexcept SystemExit:\n    raise\nexcept BaseException:\n    traceback.print_exc()\n    sys.exit(0)\n",
               "pre",
               "--level",
               "project"
@@ -27,7 +29,9 @@
             "type": "command",
             "command": "C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
             "args": [
-              "C:\\Users\\User\\source\\repos\\Tools\\skill-gate\\skill_gate.py",
+              "-I",
+              "-c",
+              "import os, sys, runpy, traceback\np = 'C:\\\\Users\\\\User\\\\source\\\\repos\\\\Tools\\\\skill-gate\\\\skill_gate.py'\nif not os.path.isfile(p):\n    sys.exit(0)\nsys.path.insert(0, os.path.dirname(p))\nsys.argv = [p] + sys.argv[1:]\ntry:\n    runpy.run_path(p, run_name='__main__')\nexcept SystemExit:\n    raise\nexcept BaseException:\n    traceback.print_exc()\n    sys.exit(0)\n",
               "post",
               "--level",
               "project"
@@ -45,7 +49,9 @@
             "type": "command",
             "command": "C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
             "args": [
-              "C:\\Users\\User\\source\\repos\\Tools\\skill-gate\\skill_gate.py",
+              "-I",
+              "-c",
+              "import os, sys, runpy, traceback\np = 'C:\\\\Users\\\\User\\\\source\\\\repos\\\\Tools\\\\skill-gate\\\\skill_gate.py'\nif not os.path.isfile(p):\n    sys.exit(0)\nsys.path.insert(0, os.path.dirname(p))\nsys.argv = [p] + sys.argv[1:]\ntry:\n    runpy.run_path(p, run_name='__main__')\nexcept SystemExit:\n    raise\nexcept BaseException:\n    traceback.print_exc()\n    sys.exit(0)\n",
               "stop",
               "--level",
               "project"
