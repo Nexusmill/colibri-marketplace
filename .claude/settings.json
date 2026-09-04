@@ -1,0 +1,60 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__plugin_universal-tools_universal-tools__safe_write|mcp__plugin_universal-tools_universal-tools__safe_replace|mcp__workspace__bash|mcp__desktop-commander(-[A-Za-z0-9_-]+)?__start_process|mcp__desktop-commander(-[A-Za-z0-9_-]+)?__write_file|mcp__desktop-commander(-[A-Za-z0-9_-]+)?__edit_block",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+            "args": [
+              "C:\\Users\\User\\source\\repos\\Tools\\skill-gate\\skill_gate.py",
+              "pre",
+              "--level",
+              "project"
+            ],
+            "timeout": 15,
+            "statusMessage": "G38 skill gate (project)"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Skill|Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__plugin_universal-tools_universal-tools__safe_write|mcp__plugin_universal-tools_universal-tools__safe_replace|mcp__workspace__bash|mcp__desktop-commander(-[A-Za-z0-9_-]+)?__start_process|mcp__desktop-commander(-[A-Za-z0-9_-]+)?__write_file|mcp__desktop-commander(-[A-Za-z0-9_-]+)?__edit_block",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+            "args": [
+              "C:\\Users\\User\\source\\repos\\Tools\\skill-gate\\skill_gate.py",
+              "post",
+              "--level",
+              "project"
+            ],
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\User\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+            "args": [
+              "C:\\Users\\User\\source\\repos\\Tools\\skill-gate\\skill_gate.py",
+              "stop",
+              "--level",
+              "project"
+            ],
+            "timeout": 15,
+            "statusMessage": "G38 skill gate (project, turn end)"
+          }
+        ]
+      }
+    ]
+  }
+}
