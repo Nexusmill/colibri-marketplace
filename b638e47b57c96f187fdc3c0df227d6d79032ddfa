@@ -1,0 +1,52 @@
+{
+ "type": "CLEAR",
+ "commit": "b638e47b57c96f187fdc3c0df227d6d79032ddfa",
+ "when": "20260904-184444",
+ "files": {
+  ".githooks/adversary_audit.py": {
+   "sha": "4eb437fc52b7715c7bed7d9e051bf6cbdee60a15f557aa6ed7a3e80ed4a37723",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260904-184415",
+   "artifact": ".adversary\\reviews\\gate_20260904-184415.md"
+  },
+  "plugins/adversary-gate/.claude-plugin/plugin.json": {
+   "sha": "5690b9055eae5c83ce41eded18a2b5da64132af35ac3884ec895191dcd9e71e8",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260904-184415",
+   "artifact": ".adversary\\reviews\\gate_20260904-184415.md"
+  },
+  "plugins/adversary-gate/tools/adversary_audit.py": {
+   "sha": "4eb437fc52b7715c7bed7d9e051bf6cbdee60a15f557aa6ed7a3e80ed4a37723",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260904-184415",
+   "artifact": ".adversary\\reviews\\gate_20260904-184415.md"
+  },
+  "plugins/adversary-gate/tools/adversary_gate.py": {
+   "sha": "03b0e9bc3a0a901ea5b2d61f269db20385c151cf98e3cdf99e22cb994510adda",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260904-184415",
+   "artifact": ".adversary\\reviews\\gate_20260904-184415.md"
+  },
+  "plugins/adversary-gate/tools/gate_selftest.py": {
+   "sha": "db37e203e0f86cd5861a267dc0828950f676f81b057be14e48c27e6b68816a79",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260904-184415",
+   "artifact": ".adversary\\reviews\\gate_20260904-184415.md"
+  },
+  "plugins/adversary-gate/tools/guard_selftest.py": {
+   "sha": "a4403d02c4c10f13620c829d7bc16a2798c5cc57f7e84a4489d8cf14007afe91",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260904-184415",
+   "artifact": ".adversary\\reviews\\gate_20260904-184415.md"
+  },
+  "plugins/adversary-gate/tools/harness_guard.py": {
+   "sha": "d596f120cceb9828d17d5216a4c65d248e2966815f7dfb3f41c97bad68cb18ce",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260904-184415",
+   "artifact": ".adversary\\reviews\\gate_20260904-184415.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260904-184415.md": "model: z-ai/glm-5.3-flash | usage: {'prompt_tokens': 68300, 'completion_tokens': 50276, 'total_tokens': 118576, 'cost': 0.0176915, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0176915, 'upstream_inference_prompt_cost': 0.0051225, 'upstream_inference_completions_cost': 0.012569}, 'completion_tokens_details': {'reasoning_tokens': 49154, 'image_tokens': 0, 'audio_tokens': 0}} | files: ['.githooks/adversary_audit.py', 'plugins/adversary-gate/.claude-plugin/plugin.json', 'plugins/adversary-gate/tools/adversary_audit.py', 'plugins/adversary-gate/tools/adversary_gate.py', 'plugins/adversary-gate/tools/gate_selftest.py', 'plugins/adversary-gate/tools/guard_selftest.py', 'plugins/adversary-gate/tools/harness_guard.py']\n\nRound-2 re-audit of the marketplace re-sync. I traced the heavy machinery against git's actual output formats and the selftest matrix rather than trusting the comments. Results:\n\n**Verified correct (traced, not taken on faith):**\n- `-z --name-status` parsing in all three twins (`_staged_removals`, `_changed_code`, `_changed_code_in_commit`): the `R100` scored status token handled via `st[0]`, R consumes 3 tokens / others 2, trailing empty NUL token skipped. `_staged_code_files`/`_all_staged_files` correctly use `--name-only` (paths only, no status column). The `.githooks/` vendored auditor and the plugin copy are byte-identical as claimed.\n- Hunk parsing under `--unified=0` (`_staged_added_lines`): new-file numbering correct across multi-hunk diffs (`-` lines don't advance `cur`; `\\ No newline` skipped); single-path invocation means a second file's `+++ b/` header can never be misread as content.\n- Guard canonicalization: two-readings enumeration (`2^n`, n\u22648), union membership for `.adversary`/`skill_gate`, per-reading `.git`/`hooks` adjacency; traced all four ambiguous-segment BLOCK rows (mixed `...`+`..`, `.. \\`, trailing-dot runs, drive-relative) to a denying reading, and all PASS rows (`skill-gate/` hyphen, `.githooks/` single segment, `.git\\info\\exclude`, `git log -n 5`, `-mn` bundle, `MODE=-n` in a message) to no match. The narrowed `-n` prefix class only excludes value-taking commit options (`c f m t`), which do not bypass hooks \u2014 narrowing is correct, not a bypass.\n- Fallback chain: every loop iteration returns, raises, or continues; last-model-empty falls through to `cmd_run`'s fail-closed BLOCK (EV-004 preserved). `_call_xai` failure paths all raise `SystemExit` so the chain advances; HTTPError ordered before its OSError parent so the 429 retry survives.\n- Selftest claims spot-executed on paper: 17 (quoted non-ASCII path now listed), 18 (T \u2192 stale sha), 19/24 (payload scan catches the `-password = '\u2026'` removal line; `run` blocks pre-model), 24b (line 6 hit, line 2 not rescanned), 24c (`--text` beats the `-diff` attribute), 24d (two-way `diff --cached` mid-merge), 0b (`--no-color`/`--no-ext-diff` now pinned on the docs feed \u2014 the round-1 HIGH is genuinely fixed at the source).\n- `GIT_NO_REPLACE_OBJECTS` omission from `_git_ok` is harmless: its remaining uses are boolean existence probes (`rev-parse --verify`, `cat-file -e`, `notes show` on already-real shas); a replace ref (which requires both objects to exist) cannot flip any of them, and every sha/graph read flows through the protected `_run_git`.\n- The check/commit rename asymmetry (staging lister has no `R`, commit lister counts R-new) is pre-existing and unchanged; it still fails closed downstream (record refuses \u2192 tripwire flags), so not re-raised.\n- The change set passes its own scanner: every keyword-assignment-shaped line in the staged gate/selftest/guard bytes resolves to a placeholder, a code-expression rejection, a sub-8-char value, or a runtime-built literal.\n\n**Below-the-bar observations (not introduced defects, listed for the record):**\n- LOW, `adversary_gate.py` `_staged_doc_added_text`: the exact-header drop set (`+++ b/<f>`) also swallows a doc *content* line spelled `++ b/<f>` (diff renders it identically). Trigger: a diff-tutorial doc containing that literal line. Impact: one line missing from the semantic docs view only \u2014 such a string cannot carry a secret, and the hunk-parser floor (`_staged_added_lines`) still pattern-scans it. Fidelity nit, not an enforcement hole.\n- LOW, pre-existing parity, `cmd_run` diff feed: it pins `core.quotepath`/root-anchoring but not `--no-color/--no-ext-diff/--text` that its sibling feeds pin. Exposure is byte-identical to the old full-repo feed (not worsened), full-file bodies still reach the reviewer, and the transmit guard matches content patterns mid-line so ANSI prefixing cannot defeat it. The \"code feed already pinned both\" comment is true of the floor feed.\n- Documented accepted costs (per the code's own no-silent-caps notes): spacey quoted passwords and long letters-only passphrases in assignments pass the regex floor; the semantic layers stand behind them by design.\n\nThe rebuttal's factual claims (EV-031 fix present and test-first at section 0b; vendored auditor bytes identical; version bump) all verify against the staged bytes.\n\nVERDICT: CLEAR"
+ }
+}
