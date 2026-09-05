@@ -37,7 +37,9 @@ import subprocess
 import sys
 
 CODE_EXTS = {".py", ".js", ".json", ".ts", ".jsx", ".tsx", ".html", ".css", ".ps1", ".sh", ".bat",
-             ".c", ".cpp", ".h", ".rs", ".go", ".java", ".glsl", ".osl"}
+             ".c", ".cpp", ".h", ".rs", ".go", ".java", ".glsl", ".osl",
+             # EV-029 (2026-09-04): ES-module / CommonJS / TS-module forms (parity with the gate)
+             ".mjs", ".cjs", ".mts", ".cts"}
 GATED_PREFIXES = (".githooks/", ".github/workflows/")
 NOTES_REF = "refs/notes/adversary"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
