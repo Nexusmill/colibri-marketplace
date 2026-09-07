@@ -1,0 +1,28 @@
+{
+ "type": "CLEAR",
+ "commit": "b76aa90095cf9bbff3e0c434f82305e7a43ec8e7",
+ "when": "20260906-230103",
+ "files": {
+  ".githooks/.gitattributes": {
+   "sha": "59bbdf10e9543338af010cfab368e9871403fb1718af441fba00844546184791",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260906-225927",
+   "artifact": ".adversary\\reviews\\gate_20260906-225927.md"
+  },
+  ".githooks/adversary_audit.py": {
+   "sha": "083943b6aae0b25cec331a995c86daeffedbd07c4071694bc25ae805414251e3",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260906-225927",
+   "artifact": ".adversary\\reviews\\gate_20260906-225927.md"
+  },
+  ".githooks/adversary_rules_epoch": {
+   "sha": "c94d14c76673aa83a3881b2fdc05102694d63f6f64fb8b08d0e07e30a477f318",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260906-225927",
+   "artifact": ".adversary\\reviews\\gate_20260906-225927.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260906-225927.md": "model: z-ai/glm-5.3-flash | usage: {'prompt_tokens': 7630, 'completion_tokens': 16731, 'total_tokens': 24361, 'cost': 0.00473964, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 256, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.00473964, 'upstream_inference_prompt_cost': 0.00055689, 'upstream_inference_completions_cost': 0.00418275}, 'completion_tokens_details': {'reasoning_tokens': 16021, 'image_tokens': 0, 'audio_tokens': 0}} | files: ['.githooks/.gitattributes', '.githooks/adversary_audit.py', '.githooks/adversary_rules_epoch']\n\nHunted across the new epoch mechanism, the `_is_code`/`HOOK_NAMES` reclassification, the walker integration, and `main`'s new states. Findings:\n\n**The ancestry anchor holds against every evasion path I could construct.**\n- Moving the recorded sha *forward* (grandfathering more commits) fails: a forward sha is a descendant of the original add commit C1, so `merge-base --is-ancestor sha C1` fails \u2192 `moved` \u2192 hard violation + strictest rules. Deleting+re-adding the file, evil merges, or multiple `hook-names` lines (last-wins parse) all still require the recorded sha to be an ancestor of the *immutable* original add C1, whose parent chain fixes the maximal exempt sha at vendoring-time HEAD. Squash/rewrite flows land in `moved` (loud).\n- Moving the sha *backward* is permitted but strictly tightens (fewer exempt commits). State `none`/`uncommitted` \u2192 rule applies everywhere (fail closed). A symlink or case-variant path fails the exact `HEAD:.githooks/adversary_rules_epoch` read \u2192 `uncommitted`/`none` \u2192 strict. No silent-weakening path exists.\n- The `uncommitted` transient (rule applies everywhere until this commit lands, reclassifying 5ebe1df) is explicitly acknowledged in the rebuttal and self-resolves on landing; after landing, the single add's ancestry check passes regardless of whether the recorded sha is the strict parent or merely an ancestor \u2014 wrong-sha outcomes are only ever loud (`moved` violation, or stricter post-epoch scoping), never a silent bypass.\n\n**Per-commit rule scoping is consistent.** `_hook_names_apply` only relaxes the new HOOK_NAMES extension; `GATED_PREFIXES` and `CODE_EXTS` still apply regardless of `hn`, so `.githooks/` files (including the new epoch file) are code under both rule sets and this landing commit still requires a note. All `_is_code` call sites in `_changed_code` (A/C/M/T, R old/new, D) consistently receive `hn`; the R-case removal semantics are unchanged from the prior behavior under old rules. `_epoch` is correctly guarded (`state != \"ok\"` returns before any `merge-base` against a possibly-None sha), memoized on the same `root` key used everywhere, and uses `check=False` throughout so no new `SystemExit` paths appear inside the walker.\n\n**Design tradeoffs, not defects:** the hard `unreadable` violation on shallow clones and the missing JSON-mode notice for `uncommitted` are fail-closed/loud behaviors explicitly adjudicated in the cited gate rounds; they cannot admit fraud, only stop the run with an explanatory message. `:(top)` pathspec syntax, `%H` parsing, and `-z` token handling are correct; default (no-rename-detection) `git log` still records a pathspec-created file as `A`, so the empty-`adds` guard only fires on genuine truncation.\n\nThe one claim I cannot verify from the staged bytes \u2014 that `b638e47b\u2026` is this repo's HEAD at vendoring time \u2014 has only loud-failure modes if wrong (permanent visible `moved` violation, or intermediate commits audited strictly), so it cannot silently weaken the audit.\n\nVERDICT: CLEAR"
+ }
+}
