@@ -3,3 +3,4 @@ post-commit text eol=lf
 pre-push text eol=lf
 adversary_audit.py text eol=lf
 adversary_baseline text eol=lf
+adversary_rules_epoch text eol=lf
