@@ -119,6 +119,8 @@ def _epoch_uncached(repo):
     rc_s, shallow = _git(repo, ["rev-parse", "--is-shallow-repository"], check=False)
     if rc_s != 0 or shallow.strip() == "true":
         return sha, "unreadable"
+    if sha == "ROOT":
+        return sha, "ok"              # ROOT skips ancestry checks, never the shallow-history check
     rc, out = _git(repo, ["log", "--full-history", "--diff-filter=A", "--format=%H", "--",
                           ":(top)" + RULES_EPOCH_FILE.replace("\\", "/")], check=False)
     if rc != 0:
@@ -140,8 +142,8 @@ def _hook_names_apply(repo, rev):
     carry no note by design (gate round 2 MEDIUM, gate_20260906-165900). No epoch line, or a
     MOVED epoch (see _epoch), = the rule applies everywhere (fail closed)."""
     sha, state = _epoch(repo)
-    if state != "ok":
-        return True
+    if state != "ok" or sha == "ROOT":
+        return True                   # ROOT epoch (armed at birth): the rule applies everywhere
     rc, _ = _git(repo, ["merge-base", "--is-ancestor", rev, sha], check=False)
     return rc != 0              # ancestor-or-equal of the epoch -> old rules
 
@@ -247,12 +249,39 @@ def main(argv=None):
                   "run install_gate.py first (the baseline marks where notarization began).")
             return 2
         baseline = open(bp, encoding="utf-8").read().strip().split()[0]
-    rc, _ = _git(root, ["rev-parse", "--verify", "--quiet", baseline + "^{commit}"], check=False)
-    if rc != 0:
-        print("adversary_audit: baseline %r is not a commit in this repo" % baseline)
-        return 2
-
-    _, out = _git(root, ["rev-list", "--reverse", baseline + "..HEAD"])
+    if baseline == "ROOT":
+        # armed at birth (owner ruling 2026-09-08): walk EVERY commit, the root included; an
+        # UNBORN HEAD (armed, nothing committed yet) has nothing to audit - exit 0, never a raw
+        # git error with the violations code (gate round 1, gate_20260908-223749)
+        rc, out = _git(root, ["rev-list", "--reverse", "HEAD"], check=False)
+        if rc != 0:
+            # A missing branch ref does not prove that nothing was committed: deleting
+            # the ref leaves unreachable history. Only an empty-of-commits object store
+            # may be called unborn here; unreadable history or object enumeration fails closed.
+            rc_b, branch = _git(root, ["symbolic-ref", "-q", "HEAD"], check=False)
+            rc_r, _ = _git(root, ["show-ref", "--verify", "--quiet", branch.strip()],
+                           check=False) if rc_b == 0 and branch.strip() else (128, "")
+            rc_o, objects = _git(root, ["cat-file", "--batch-all-objects",
+                                        "--batch-check=%(objecttype)"], check=False) \
+                            if rc_b == 0 and rc_r == 1 else (128, "")
+            if rc_b == 0 and rc_r == 1 and rc_o == 0 and all(
+                    kind in {"blob", "tree", "tag"} for kind in objects.splitlines()):
+                if a.as_json:                     # --json consumers always get a document
+                    print(json.dumps({"baseline": "ROOT", "commits_walked": 0,
+                                      "code_commits_audited": 0, "violations": [],
+                                      "overrides": []}, indent=1))
+                else:
+                    print("adversary_audit: baseline ROOT and no commits yet - nothing to audit")
+                return 0
+            print("adversary_audit: baseline ROOT but the history read FAILED (missing objects or "
+                  "a broken HEAD) - fail closed")
+            return 2
+    else:
+        rc, _ = _git(root, ["rev-parse", "--verify", "--quiet", baseline + "^{commit}"], check=False)
+        if rc != 0:
+            print("adversary_audit: baseline %r is not a commit in this repo" % baseline)
+            return 2
+        _, out = _git(root, ["rev-list", "--reverse", baseline + "..HEAD"])
     revs = [r for r in out.split() if r]
     violations, overrides, audited = [], [], 0
     ep_sha, ep_state = _epoch(root)
