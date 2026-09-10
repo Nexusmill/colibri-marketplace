@@ -149,14 +149,22 @@ Same laws + the debug ladder, in order, no skipping:
 - Write the review to `.colibri_reviews/<rel path with separators as __>__<mode>__<sha8>.md` with a
   header: source path · reviewer (model/tool id) · sha256 · date · mode · one-line context-pack
   summary (what was consulted).
-- Update `.colibri_reviews/_manifest.json` in the EXACT canonical row shape — consumers
-  iterate `entry["modes"]` and anything else is silently invisible: `"<ABSOLUTE file
-  path>": {"rel": "<repo-relative path>", "modes": {"<mode>": {"sha": ..., "output": ...,
-  "reviewed_at": ..., tokens_in/out if known, "cost": ...}}}`. Never mode keys at the
-  entry's top level, never a relative-path key, never a second entry for a file that has
-  one (fold into its `modes`). This is the sha-keyed cache Phase 0 checks. Write it
-  ATOMICALLY (tmp → os.replace): a corrupted manifest silently resets the whole project's
-  review cache and every file re-reviews as "new".
+- Update `.colibri_reviews/_manifest.json` in the EXACT canonical row shape — both consumers
+  (colibri store.py and repo-memory's indexer) iterate `entry["modes"]` and anything else is
+  SILENTLY INVISIBLE: `"<ABSOLUTE file path>": {"rel": "<repo-relative path>", "modes":
+  {"<mode>": {"sha": "<full sha256>", "output": ".colibri_reviews/<review file>",
+  "reviewed_at": "YYYY-MM-DD HH:MM", "cost": <number>}}}`. Pinned 2026-09-10, after four
+  formats had grown in the wild: `reviewed_at` is that minute-resolution local string (store.py's
+  own format) — never ISO/microseconds, never a bare date; `cost` is a number, 0 for an
+  in-session review, never null; `output` is repo-relative; `tokens_in`/`tokens_out` only when
+  known. Never mode keys at the entry's top level, never a relative-path key, never a second
+  entry for a file that already has one (fold into its `modes`). A manifest that is not already
+  in this shape (a `files` wrapper, 8-hex shas, relative-keyed or wrapperless rows) is migrated
+  WHOLE before any row is added — `python -m repo_memory.colibri --repo <root> --migrate`
+  rewrites it in place — because a legacy file has nothing canonical to fold into and a row
+  appended beside it fragments the record (Blink and Caliper, 2026-09-10). This is the
+  sha-keyed cache Phase 0 checks. Write it ATOMICALLY (tmp → os.replace): a corrupted manifest
+  silently resets the whole project's review cache and every file re-reviews as "new".
 - Multi-file jobs end with ONE synthesis section (cross-file findings, ranked) after all per-file
   units — never instead of them.
 - Repo work → commit per your project's convention (e.g. `review(scope):` or `fix(scope):`), with
