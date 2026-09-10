@@ -1,0 +1,16 @@
+{
+ "type": "CLEAR",
+ "commit": "f636f4f9de05db0d3c69169a55a9ec8bce370132",
+ "when": "20260910-025235",
+ "files": {
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "c60f4831ab337e65b8e62fb22adb69b930f7796b4b1b8e692d6fc161847cdb94",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260910-025001",
+   "artifact": ".adversary\\reviews\\gate_20260910-025001.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260910-025001.md": "model: z-ai/glm-5.3-flash | usage: {'prompt_tokens': 798, 'completion_tokens': 4026, 'total_tokens': 4824, 'cost': 0.0021327, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0021327, 'upstream_inference_prompt_cost': 0.0001197, 'upstream_inference_completions_cost': 0.002013}, 'completion_tokens_details': {'reasoning_tokens': 3596, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['plugins/colibri-review/.claude-plugin/plugin.json']\n\n## Review\n\n**Scope of staged bytes:** exactly one file, `plugins/colibri-review/.claude-plugin/plugin.json`, one hunk, one line: `\"version\": \"0.2.1\"` \u2192 `\"0.2.2\"`. Nothing else is staged.\n\n**Verified against the provided bytes:**\n- Author claim \"plugin.json changes only the version string, one line\" \u2014 **confirmed** by the diff and the full staged file. Description, keywords, author, license are untouched.\n- JSON is well-formed: balanced braces, no trailing commas, all strings quoted. Parses cleanly.\n- `0.2.2` is a valid semver patch increment over `0.2.1`; no consumer of this manifest's version is visible in the provided files, so no caller/site can break.\n\n**Claims I cannot verify from the provided bytes (and why they don't block):**\n- The SKILL.md Phase 4 paragraph, its byte-identity across the three copies, and the `repo_memory.colibri --migrate` flag (26/26 gate) all live outside this diff. No SKILL.md or repo_memory bytes are staged here, so this change neither introduces nor worsens any of those points. The present-tense claim that the paragraph \"is byte-identical across the three copies\" is consistent with the docs change having already landed and this commit being the release-version bump; if instead the SKILL.md edit was meant to ride in this commit and was forgotten to stage, the worst case is an empty-content release \u2014 a staging/process slip, not a defect these bytes introduce or enable.\n- The author's own note that the `--migrate` gate round \"is running now\" describes a parallel, not-yet-landed repo-memory change. That is a cross-repo timing concern for the docs content, which this diff does not touch.\n\nNo logic, call-site, contract, security, or state/ordering surface exists in a one-line manifest version bump, and every claim checkable against the staged bytes checks out.\n\nVERDICT: CLEAR"
+ }
+}
