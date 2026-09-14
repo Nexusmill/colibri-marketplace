@@ -1,0 +1,16 @@
+{
+ "type": "CLEAR",
+ "commit": "a89fef84529fbea47c23350d1881b1771413ce79",
+ "when": "20260914-171631",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "47eb03f429b97aaca6032e36989c2a572d55233b76c6e3a446d5898be862e75a",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260914-171625",
+   "artifact": ".adversary\\reviews\\gate_20260914-171625.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260914-171625.md": "model: z-ai/glm-5.3-flash | usage: {'prompt_tokens': 1194, 'completion_tokens': 3820, 'total_tokens': 5014, 'cost': 0.0020891, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0020891, 'upstream_inference_prompt_cost': 0.0001791, 'upstream_inference_completions_cost': 0.00191}, 'completion_tokens_details': {'reasoning_tokens': 3316, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json']\n\nAdversarial audit of the staged change (version bump in `.claude-plugin/marketplace.json` only):\n\n**What I verified against the provided bytes:**\n\n1. **Diff/file consistency** \u2014 Both hunks (`@@ -5,17 +5,17 @@`, `@@ -26,17 +26,17 @@`) are single-line version changes; every context line matches the full staged file exactly. No smuggled edits to `name`, `source`, `description`, `keywords`, or structure.\n2. **JSON validity** \u2014 Full parse of the staged file: balanced braces/brackets, no duplicate keys, valid UTF-8 (em dash in the colibri-review description is fine). Schema-declared fields (`$schema`, `name`, `owner`, `plugins[].{name,source,version,author,license,keywords}`) conform to the marketplace shape; relative `./plugins/...` sources are well-formed.\n3. **Version monotonicity** \u2014 `adversary-gate` 0.1.0 \u2192 0.2.0 and `colibri-review` 0.2.1 \u2192 0.2.2 are both strict increases. No downgrade that could break update detection or pin resolution.\n4. **Repo doctrine** \u2014 No `.colibri_reviews/_manifest.json` rows are touched, so no fragmentation/wrapper/relative-key violations are possible in this changeset.\n5. **Call-site/contract impact** \u2014 This file is declarative marketplace metadata; nothing in the visible bytes consumes these version strings in a way a monotonic bump could break. The gate/push-guard/CI machinery described in the `adversary-gate` description is unaffected by its own version label.\n\n**Considered and rejected:**\n\n- *marketplace.json vs. per-plugin `plugin.json` version parity* \u2014 A divergence could theoretically confuse tooling, but no plugin manifest bytes are provided, so no mismatch is demonstrable. Blocking on invisible files would be speculation, not a verified defect.\n- *Version bump with no plugin code in the staged diff* \u2014 Plausibly the plugin changes landed in prior commits and this is the release-metadata step; even if not, a version label ahead of content in a same-repo relative-path source is hygiene, not a functional defect the change enables.\n\nNo logic errors, no broken consumers, no invalid bytes, no contract breaks with anything visible.\n\nVERDICT: CLEAR"
+ }
+}
