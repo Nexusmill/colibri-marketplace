@@ -31,8 +31,10 @@ commit.
   installer (or `git config core.hooksPath .githooks`) once. The push guard and CI
   audit exist precisely because client-side hooks are advisory.
 - **The reviewer costs money — yours.** Reviews run on OpenRouter with YOUR
-  `OPENROUTER_API_KEY` (roughly a cent per commit with `z-ai/glm-5.2`, the
-  field-recommended model). No key, no clearances, no code commits: the gate fails
+  `OPENROUTER_API_KEY` (the shipped default chain is GLM-5.3-Flash via OpenRouter,
+  falling back to xAI Grok-4.6 on your `XAI_API_KEY` — the exact ids are the
+  `DEFAULT_MODEL` line in `tools/adversary_gate.py`; override with `--model` or
+  `ADVERSARY_MODEL`). No key, no clearances, no code commits: the gate fails
   closed by design.
 - **The OVERRIDE escape belongs to the repo OWNER.** A file `.adversary/OVERRIDE`
   lets exactly one commit through, loudly, and is auditable forever (it becomes a
@@ -61,7 +63,7 @@ git update-index --chmod=+x .githooks/pre-commit .githooks/post-commit .githooks
 git commit -m "chore(gate): arm the adversarial commit gate"
 
 # 4. obtain the clearance, then commit for real
-python <plugin-root>/tools/adversary_gate.py run --model z-ai/glm-5.2
+python <plugin-root>/tools/adversary_gate.py run   # default model chain; --model overrides
 git commit -m "chore(gate): arm the adversarial commit gate"
 
 # 5. verify the durable evidence
@@ -90,7 +92,7 @@ python <plugin-root>/tools/guard_selftest.py     # 34 checks - the harness deny-
 ## Provenance
 
 This plugin is a versioned snapshot of the canonical suite in the Nexusmill Tools
-repo at commit `d7d496f` (2026-08-31). The canonical source of truth remains that
+repo at commit `5cd90e7` (2026-09-04). The canonical source of truth remains that
 repo; the snapshot is updated deliberately, with the same adversarial review this
 tool enforces — every commit of this marketplace passes its own gate.
 

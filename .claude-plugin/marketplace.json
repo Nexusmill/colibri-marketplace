@@ -10,7 +10,7 @@
       "name": "adversary-gate",
       "source": "./plugins/adversary-gate",
       "description": "A mandatory adversarial commit gate: no code commit without an independent external model's VERDICT CLEAR keyed to the exact staged bytes; durable git-notes evidence on every commit; a push guard that refuses un-evidenced history; CI re-audit. Detection is the guarantee - prevention is not claimed.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "Nexusmill"
       },
@@ -31,7 +31,7 @@
       "name": "colibri-review",
       "source": "./plugins/colibri-review",
       "description": "A rigorous, context-aware code review & debug protocol: one file at a time, context before code, adversarially verified findings, five modes — bug, quality, feature, spec conformance, remediation plan.",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "author": {
         "name": "Nexusmill"
       },

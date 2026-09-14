@@ -33,7 +33,7 @@ cd <repo>
 git add .githooks .gitignore
 git update-index --chmod=+x .githooks/pre-commit .githooks/post-commit .githooks/pre-push
 git commit -m "chore(gate): arm the adversarial commit gate"   # MUST be refused - that is the proof
-python ${CLAUDE_PLUGIN_ROOT}/tools/adversary_gate.py run --model z-ai/glm-5.2
+python ${CLAUDE_PLUGIN_ROOT}/tools/adversary_gate.py run   # default model chain; --model overrides
 git commit -m "chore(gate): arm the adversarial commit gate"   # now passes; post-commit notarizes it
 ```
 
@@ -47,7 +47,7 @@ If the first commit SUCCEEDS, something is broken — audit with
 1. Finish ALL edits (clearance follows bytes; any re-edit invalidates it).
 2. Stage everything that belongs in the commit — including `.json` manifest rows,
    which get reviewed WITH the change they describe.
-3. `python ${CLAUDE_PLUGIN_ROOT}/tools/adversary_gate.py run --model z-ai/glm-5.2`
+3. `python ${CLAUDE_PLUGIN_ROOT}/tools/adversary_gate.py run`
    (add `--context "..."` for design intent, provenance of copied bytes, or a
    factual rebuttal of a previous BLOCK — the reviewer re-verifies rebuttals
    against the bytes and calls out false ones).
@@ -75,7 +75,7 @@ checks out GitHub's synthetic merge commit, which can never carry a note).
 ## When something misbehaves (all field-verified)
 
 - Reviewer hangs or returns empty → the gate fails CLOSED with BLOCK (designed);
-  re-run with `--model z-ai/glm-5.2`.
+  re-run with `--model <another OpenRouter model>`.
 - Commit passes when it should be refused → unarmed clone or 100644 hook mode;
   `install_gate.py <repo> --verify-only`, re-run the installer, redo the chmod step.
 - Push refused listing ancient commits → the baseline should exclude pre-gate
