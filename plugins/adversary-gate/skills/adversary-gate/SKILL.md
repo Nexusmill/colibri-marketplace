@@ -8,16 +8,20 @@ description: Arm, operate, and audit the mandatory adversarial commit gate - no 
 All tooling ships in this plugin under `tools/` (stdlib Python + POSIX sh; read
 `${CLAUDE_PLUGIN_ROOT}/tools/` — the scripts are short). The canonical upstream is
 the Nexusmill Tools repo (snapshot provenance: see README.md). Prerequisites: git,
-Python 3.11+, `OPENROUTER_API_KEY` in the environment (the adopter's own spend,
-~a cent per commit).
+Python 3.11+, `OPENROUTER_API_KEY` in the environment (the adopter's own spend).
 
 ## The law (non-negotiable once a repo is armed)
 
-1. A commit staging CODE (`.py .js .json .ts .jsx .tsx .html .css .ps1 .sh .bat .c
-   .cpp .h .rs .go .java .glsl .osl`, anything under `.githooks/` or
+1. A commit staging CODE (`.py .js .mjs .cjs .json .ts .mts .cts .jsx .tsx .html
+   .css .ps1 .sh .bat .c .cpp .h .rs .go .java .glsl .osl`, any file named
+   `pre-commit`/`post-commit`/`pre-push`, anything under `.githooks/` or
    `.github/workflows/`, code deletions/renames-away, merges) is REFUSED without a
    fresh `VERDICT: CLEAR` from the external reviewer, keyed to the exact staged blob
-   sha256s. Re-editing invalidates clearance. Plain `.md` passes free.
+   sha256s. Re-editing invalidates clearance. Docs never go to the external reviewer:
+   their added lines pass the local pattern floor and, if a local model is installed,
+   the on-machine docs reviewer (`docscan.py`) — warnings at commit, never a block;
+   the PUSH guard refuses an outgoing commit carrying a secret literal or a
+   docs-model block.
 2. NEVER bypass: no `--no-verify`, no re-pointing the hooks config, no plumbing
    commits, no writing `.adversary/**` by hand, no fabricated notes. If a layer
    blocks you, that layer is working. The one-shot `.adversary/OVERRIDE` escape
@@ -84,9 +88,11 @@ checks out GitHub's synthetic merge commit, which can never carry a note).
   carries the exact fetch+merge recovery commands.
 - `refusing to allow an OAuth App to ... without 'workflow' scope` → GitHub, not
   the gate: `gh auth refresh -h github.com -s workflow` once, push again.
-- Hook prints `tool not found ... failing CLOSED` → the plugin moved or was
-  uninstalled; re-run this plugin's installer so the shims point at its current
-  location (the installer substitutes its own path at install time).
+- Hook prints `tool not found ... failing CLOSED`, or commits suddenly pass unreviewed
+  → the plugin moved, was UPDATED (Claude Code keeps plugins in a versioned cache
+  directory) or uninstalled; re-run this plugin's installer in every armed repo so
+  the `core.hooksPath` pin and the shims point at its current location
+  (`install_gate.py <repo> --verify-only` reports a dangling pin).
 
 ## Full runbook
 

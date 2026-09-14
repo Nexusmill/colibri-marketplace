@@ -22,11 +22,15 @@ commit.
 
 ## Trust model — read this before installing
 
-- **The hooks exec code from this plugin's install path.** `install_gate.py` writes
-  hook shims into your repo whose `GATE=` line points at THIS plugin's
-  `tools/adversary_gate.py` (substituted at install time). You are trusting these
-  scripts with every commit; read them — they are short, stdlib-only Python and
-  POSIX sh.
+- **The hooks exec code from this plugin's install path.** `install_gate.py` pins
+  your repo's `core.hooksPath` to THIS plugin's `tools/hooks/` dispatchers (an
+  absolute path, so worktrees are armed too) and writes `.githooks/` shims whose
+  `GATE=` line points at THIS plugin's `tools/adversary_gate.py` (substituted at
+  install time; those travel with the repo for CI and other machines). You are
+  trusting these scripts with every commit; read them — they are short, stdlib-only
+  Python and POSIX sh. Claude Code keeps plugins in a versioned cache directory, so
+  after a plugin UPDATE re-run the installer in every armed repo (`--verify-only`
+  reports a dangling pin).
 - **A fresh clone is UNARMED.** Git cannot ship config; every clone must run the
   installer (or `git config core.hooksPath .githooks`) once. The push guard and CI
   audit exist precisely because client-side hooks are advisory.
@@ -80,19 +84,34 @@ troubleshooting chapter where every entry actually happened:
 `docs/GATE_ADOPTION_PLAYBOOK.md` in the
 [colibri-code-review repo](https://github.com/Nexusmill/colibri-code-review).
 
-## Selftests (no network; the model is stubbed)
+## Selftests (no network; the external model is stubbed)
 
 ```
-python <plugin-root>/tools/gate_selftest.py      # 30 checks - gate, notary, push guard
-python <plugin-root>/tools/install_selftest.py   # 38 checks - installer claims incl. relocation
-python <plugin-root>/tools/audit_selftest.py     # 15 checks - bypass/forgery/override detection
-python <plugin-root>/tools/guard_selftest.py     # 34 checks - the harness deny-guard matrix
+python <plugin-root>/tools/gate_selftest.py      # 113 checks - gate, notary, push guard, secret floor
+python <plugin-root>/tools/install_selftest.py   # 73 checks - installer claims incl. relocation
+python <plugin-root>/tools/audit_selftest.py     # 50 checks - bypass/forgery/override detection
+python <plugin-root>/tools/guard_selftest.py     # 231 checks - the harness deny-guard matrix
+python <plugin-root>/tools/docscan_selftest.py   # 14 checks - the local docs reviewer (needs the model)
 ```
+
+## The docs lane (optional local model)
+
+Documentation is never sent to the external reviewer. Its added lines pass the local
+pattern floor at commit time and, when a local model is present, `docscan.py` — an
+on-machine semantic scan for prose secrets the floor cannot see ("the wifi password
+is ..."). Without a model the gate says so on every docs commit (`docs SEMANTIC review
+SKIPPED`) and `gate_selftest.py` reports the gap; nothing is blocked. To enable it:
+llama.cpp's `llama-cli` on PATH (or `NEXUSMILL_LLAMA_CLI=<path>`) and the GGUF at
+`~/.nexusmill/docscan/Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf` (or
+`NEXUSMILL_DOCSCAN_MODEL=<path>` plus `NEXUSMILL_DOCSCAN_MODEL_SHA` to pin it);
+`NEXUSMILL_DOCSCAN_NGL=0` for CPU-only. Secret-shaped hits WARN at commit and are
+scrubbed from the review payload; the PUSH guard refuses an outgoing commit that
+carries a secret literal or a docs-model block.
 
 ## Provenance
 
 This plugin is a versioned snapshot of the canonical suite in the Nexusmill Tools
-repo at commit `5cd90e7` (2026-09-04). The canonical source of truth remains that
+repo at commit `6773f97` (2026-09-10). The canonical source of truth remains that
 repo; the snapshot is updated deliberately, with the same adversarial review this
 tool enforces — every commit of this marketplace passes its own gate.
 

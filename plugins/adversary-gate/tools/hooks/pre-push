@@ -1,0 +1,40 @@
+#!/bin/sh
+# Adversary gate PUSH GUARD dispatcher (G39; notes are MANDATORY on push; machine-wide since
+# 2026-09-06). Fail-closed like the pre-commit wall: a missing tool or a modified dispatcher
+# refuses the push. stdin (the ref lines) is captured once so BOTH the gate and the repo's OWN
+# pre-push hook (default hook dir, never .githooks/) get it. Suite resolved from $0.
+SUITE="$(cd "$(dirname "$0")/.." 2>/dev/null && (pwd -W 2>/dev/null || pwd))"
+SELF="hooks/$(basename "$0")"
+# suite_git: git against the suite with a CLEAN git context - see hooks/pre-commit (EV-043,
+# 2026-09-07). A leaked absolute GIT_INDEX_FILE/GIT_DIR (or -c config / ceiling dir) from an
+# enclosing context would else re-target `git -C "$SUITE"` onto the wrong repo and false-refuse
+# the push. STRICTLY fail-closed: no in-band exception (EV-043 rounds 1-3).
+suite_git() {
+  ( unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+          GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT \
+          GIT_CEILING_DIRECTORIES
+    git -C "$SUITE" "$@" )
+}
+if suite_git rev-parse --git-dir >/dev/null 2>&1; then
+  if ! suite_git ls-files --error-unmatch "$SELF" >/dev/null 2>&1 \
+     || ! suite_git diff --quiet HEAD -- "$SELF" 2>/dev/null; then
+    echo "ADVERSARY PUSH GUARD: dispatcher $SELF is MODIFIED or uncommitted in the suite working tree ($SUITE) - refusing the push (fail-closed) until it is committed through the gate." >&2
+    exit 1
+  fi
+fi
+GATE="$SUITE/adversary_gate.py"
+PYBIN="C:/Users/User/AppData/Local/Programs/Python/Python311/python.exe"
+[ -x "$PYBIN" ] || { command -v python3 >/dev/null 2>&1 && PYBIN=python3 || PYBIN=python; }
+if [ ! -f "$GATE" ]; then
+  echo "ADVERSARY PUSH GUARD: tool not found at $GATE - refusing the push (fail-closed)." >&2
+  exit 1
+fi
+IN="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/advpush.$$")"
+cat > "$IN"
+"$PYBIN" "$GATE" check-push "$1" < "$IN"
+RC=$?
+if [ $RC -ne 0 ]; then rm -f "$IN"; exit $RC; fi
+OWN="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/pre-push"
+if [ -x "$OWN" ]; then "$OWN" "$@" < "$IN"; RC=$?; fi
+rm -f "$IN"
+exit $RC

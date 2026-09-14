@@ -1,0 +1,38 @@
+#!/bin/sh
+# Adversary gate NOTARIZATION dispatcher (G39 layer 3; machine-wide since 2026-09-06). Cannot
+# block a commit: a missing note IS the audit tripwire's signal, so a missing tool or a
+# modified dispatcher only WARNS and skips notarization. Then the repo's OWN post-commit hook
+# in its default hook dir, if any (never .githooks/). Suite resolved from $0 (relocatable).
+SUITE="$(cd "$(dirname "$0")/.." 2>/dev/null && (pwd -W 2>/dev/null || pwd))"
+SELF="hooks/$(basename "$0")"
+TAMPERED=0
+# suite_git: git against the suite with a CLEAN git context - see hooks/pre-commit (EV-043,
+# 2026-09-07). Without it a partial commit's absolute GIT_INDEX_FILE (or a leaked -c / ceiling
+# dir) re-targets `git -C "$SUITE"` onto the committing repo and a byte-clean dispatcher reads as
+# tampered - notarization silently skipped, so the audit tripwire would later flag a validly-gated
+# commit. STRICTLY fail-closed like pre-commit: no in-band exception (EV-043 rounds 1-3).
+suite_git() {
+  ( unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+          GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT \
+          GIT_CEILING_DIRECTORIES
+    git -C "$SUITE" "$@" )
+}
+if suite_git rev-parse --git-dir >/dev/null 2>&1; then
+  if ! suite_git ls-files --error-unmatch "$SELF" >/dev/null 2>&1 \
+     || ! suite_git diff --quiet HEAD -- "$SELF" 2>/dev/null; then
+    TAMPERED=1
+  fi
+fi
+GATE="$SUITE/adversary_gate.py"
+PYBIN="C:/Users/User/AppData/Local/Programs/Python/Python311/python.exe"
+[ -x "$PYBIN" ] || { command -v python3 >/dev/null 2>&1 && PYBIN=python3 || PYBIN=python; }
+if [ "$TAMPERED" = 1 ]; then
+  echo "ADVERSARY NOTARY: dispatcher $SELF is MODIFIED or uncommitted in the suite working tree ($SUITE) - commit NOT notarized; the audit tripwire will flag it." >&2
+elif [ ! -f "$GATE" ]; then
+  echo "ADVERSARY NOTARY: tool not found at $GATE - commit NOT notarized; the audit tripwire will flag it." >&2
+else
+  "$PYBIN" "$GATE" record || echo "ADVERSARY NOTARY: commit NOT notarized - the audit tripwire will flag it." >&2
+fi
+OWN="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/post-commit"
+if [ -x "$OWN" ]; then exec "$OWN" "$@"; fi
+exit 0

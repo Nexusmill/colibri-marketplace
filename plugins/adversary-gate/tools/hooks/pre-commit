@@ -1,0 +1,47 @@
+#!/bin/sh
+# Adversary gate MACHINE-WIDE dispatcher (G39; owner order 2026-09-06: arming is universal).
+# This directory is git's GLOBAL core.hooksPath on the owner's machine and is pinned per repo
+# by install_gate.py as an ABSOLUTE value - so a worktree on a branch without .githooks/ is
+# armed too (a relative value dangles there and git runs nothing: probe 2026-09-06).
+# Order: the self-check, the gate (fail-closed), then the repo's OWN hook in its default hook
+# dir, if any. Never chains into .githooks/ - that shim execs the same gate (double review).
+# The suite dir is resolved from $0 so a RELOCATED suite copy (plugin distribution) execs ITS
+# OWN gate, never the authoring machine's path.
+SUITE="$(cd "$(dirname "$0")/.." 2>/dev/null && (pwd -W 2>/dev/null || pwd))"
+SELF="hooks/$(basename "$0")"
+# SELF-CHECK (gate round 5, gate_20260906-173424; hardened EV-043 rounds 1-3, 2026-09-07): this
+# file EXECUTES from the suite's working tree, so an uncommitted edit here would disarm every
+# pinned repo. STRICTLY fail-closed: refuse to run whenever SELF differs from its committed
+# (gate-reviewed) blob or is untracked. There is NO in-band exception - a dispatcher edit is
+# committed through the suite's .githooks shim (execs the gate with no self-check) then re-pinned
+# with install_gate.py. An in-band "the suite may commit SELF" exception produced a hole every
+# review round: untracked passed; then staged + a partial commit of OTHER paths passed and was
+# notarized clean while the modified dispatcher executed. So the exception is gone entirely.
+# suite_git: git against the suite with a CLEAN git context. A partial commit (git commit --
+# <paths>) or an enclosing hook exports an ABSOLUTE GIT_INDEX_FILE/GIT_DIR (and can leak -c config
+# or a ceiling dir) that would otherwise re-target `git -C "$SUITE"` onto the COMMITTING repo or
+# skip discovery - the self-check then read the wrong index and false-fired on a clean suite.
+suite_git() {
+  ( unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+          GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT \
+          GIT_CEILING_DIRECTORIES
+    git -C "$SUITE" "$@" )
+}
+if suite_git rev-parse --git-dir >/dev/null 2>&1; then
+  if ! suite_git ls-files --error-unmatch "$SELF" >/dev/null 2>&1 \
+     || ! suite_git diff --quiet HEAD -- "$SELF" 2>/dev/null; then
+    echo "ADVERSARY GATE: dispatcher $SELF is MODIFIED or uncommitted in the suite working tree ($SUITE) - failing CLOSED until it is committed through the gate (via the .githooks shim)." >&2
+    exit 1
+  fi
+fi
+GATE="$SUITE/adversary_gate.py"
+PYBIN="C:/Users/User/AppData/Local/Programs/Python/Python311/python.exe"
+[ -x "$PYBIN" ] || { command -v python3 >/dev/null 2>&1 && PYBIN=python3 || PYBIN=python; }
+if [ ! -f "$GATE" ]; then
+  echo "ADVERSARY GATE: tool not found at $GATE - failing CLOSED." >&2
+  exit 1
+fi
+"$PYBIN" "$GATE" check || exit $?
+OWN="$(git rev-parse --git-common-dir 2>/dev/null)/hooks/pre-commit"
+if [ -x "$OWN" ]; then exec "$OWN" "$@"; fi
+exit 0

@@ -58,6 +58,103 @@ BLOCK = [
     # regressions for the confirmed bypasses closed this session:
     ("adversary_comment_bypass", bash('echo "{}" > .adversary/clearance.json  # adversary_gate.py')),
     ("hookspath_prefix", bash("git config core.hooksPath .githooks-evil")),
+    # universal arming (2026-09-06): the GLOBAL value is the owner's alone, in any spelling;
+    # the canonical dispatcher dir is an arming value only when EXACT (no suffix, no traversal)
+    ("hookspath_global_canonical", bash("git config --global core.hooksPath C:/Users/User/source/repos/Tools/adversary-gate/hooks")),
+    ("hookspath_global_githooks", bash("git config --global core.hooksPath .githooks")),
+    ("hookspath_canonical_suffix", bash("git config core.hooksPath C:/Users/User/source/repos/Tools/adversary-gate/hooks-evil")),
+    ("hookspath_canonical_traversal", bash("git config core.hooksPath C:/Users/User/source/repos/Tools/adversary-gate/hooks/../x")),
+    # commit-B gate round 1 (gate_20260906-182251) HIGH: an invisible-whitespace SUFFIX (tab,
+    # NBSP) passed the boundary lookahead; git stores the value verbatim, Win32 trims only
+    # U+0020 and dots, so the hook dir does not resolve and NO hook runs - a silent disarm
+    ("hookspath_githooks_nbsp_suffix", bash('git config core.hooksPath ".githooks\u00a0"')),
+    ("hookspath_githooks_tab_suffix", bash('git config core.hooksPath ".githooks\t"')),
+    ("hookspath_canonical_nbsp_suffix", bash('git config core.hooksPath "C:/Users/User/source/repos/Tools/adversary-gate/hooks\u00a0"')),
+    ("hookspath_canonical_tab_suffix", bash('git config core.hooksPath "C:/Users/User/source/repos/Tools/adversary-gate/hooks\t"')),
+    # commit-B gate round 1 HIGH: the machine-wide dispatcher dir is the live gate for every
+    # armed repo - same covenant as .git/hooks: no Bash reference at all (a deleted dispatcher
+    # runs NO hook; an edited one fails closed on itself, but the guard cannot tell), no file
+    # tool writes. Edits go through safe_write and land through the gate (HOOK_NAMES code).
+    ("dispatcher_bash_rm", bash("rm C:/Users/User/source/repos/Tools/adversary-gate/hooks/pre-commit")),
+    ("dispatcher_bash_del_backslash", bash(r"del C:\Users\User\source\repos\Tools\adversary-gate\hooks\pre-push")),
+    ("dispatcher_bash_mv", bash("mv adversary-gate/hooks/post-commit /tmp/x")),
+    ("dispatcher_bash_git_rm", bash("git rm adversary-gate/hooks/pre-commit")),
+    ("dispatcher_bash_redirect", bash("echo 'exit 0' > adversary-gate/hooks/pre-commit")),
+    ("dispatcher_write_tool", ftool("Write", r"C:\Users\User\source\repos\Tools\adversary-gate\hooks\pre-commit")),
+    ("dispatcher_edit_tool", ftool("Edit", "/c/Users/User/source/repos/Tools/adversary-gate/hooks/pre-push")),
+    ("dispatcher_write_dotslash", ftool("Write", r"C:\Users\User\source\repos\Tools\adversary-gate\.\hooks\post-commit")),
+    # the arming-command exemption must not share a segment with anything else (EV-022)
+    ("dispatcher_arming_then_rm_same_segment", bash("git config core.hooksPath C:/Users/User/source/repos/Tools/adversary-gate/hooks && rm C:/Users/User/source/repos/Tools/adversary-gate/hooks/pre-commit")),
+    ("dispatcher_rm_with_arming_comment", bash("rm C:/Users/User/source/repos/Tools/adversary-gate/hooks/pre-commit # git config core.hooksPath C:/Users/User/source/repos/Tools/adversary-gate/hooks")),
+    # commit-B gate round 2 (gate_20260906-183449) HIGH F1: the spellings pinned for .git/hooks
+    # apply here too - Win32 trims trailing dot/space runs per segment, and any intermediate
+    # (`z/..`) resolves away; deny-on-doubt like the .git/hooks rule
+    ("dispatcher_trailing_dot_final", bash("mv C:/Users/User/source/repos/Tools/adversary-gate/hooks. D:/stash")),
+    ("dispatcher_trailing_dot_intermediate", bash(r"del C:\Users\User\source\repos\Tools\adversary-gate\hooks.\pre-commit")),
+    ("dispatcher_dotdot_intermediate", bash("rm C:/Users/User/source/repos/Tools/adversary-gate/z/../hooks/pre-commit")),
+    ("dispatcher_trailing_dots_run", bash("rm -r C:/Users/User/source/repos/Tools/adversary-gate/hooks..")),
+    ("dispatcher_dot_space_run_quoted", bash('rm -r "C:/Users/User/source/repos/Tools/adversary-gate/hooks. "')),
+    # HIGH F2: executable content inside the exempted inline-arming form (segments split on
+    # ;&| only - $(), backticks and process substitution ride inside)
+    ("dispatcher_inline_arming_with_subst", bash('git -c core.hooksPath=C:/Users/User/source/repos/Tools/adversary-gate/hooks commit -m "$(rm C:/Users/User/source/repos/Tools/adversary-gate/hooks/pre-commit)"')),
+    ("dispatcher_inline_arming_with_backtick", bash('git -c core.hooksPath=C:/Users/User/source/repos/Tools/adversary-gate/hooks commit -m "`rm C:/Users/User/source/repos/Tools/adversary-gate/hooks/pre-commit`"')),
+    ("dispatcher_inline_arming_with_procsubst", bash("git -c core.hooksPath=C:/Users/User/source/repos/Tools/adversary-gate/hooks commit -F <(rm C:/Users/User/source/repos/Tools/adversary-gate/hooks/pre-commit)")),
+    # commit-B gate round 3 (gate_20260906-184635) HIGH: a plain redirection rides in the
+    # exempted inline form too - bash truncates the dispatcher BEFORE git runs (O_TRUNC), an
+    # empty pre-commit exits 0 for every armed repo from then on
+    ("dispatcher_inline_arming_with_redirect", bash("git -c core.hooksPath=C:/Users/User/source/repos/Tools/adversary-gate/hooks commit -q -m x > C:/Users/User/source/repos/Tools/adversary-gate/hooks/pre-commit")),
+    ("dispatcher_inline_arming_with_stderr_redirect", bash("git -c core.hooksPath=C:/Users/User/source/repos/Tools/adversary-gate/hooks commit -m x 2> C:/Users/User/source/repos/Tools/adversary-gate/hooks/pre-push")),
+    ("dispatcher_inline_arming_with_append", bash("git -c core.hooksPath=C:/Users/User/source/repos/Tools/adversary-gate/hooks commit -m x >> C:/Users/User/source/repos/Tools/adversary-gate/hooks/post-commit")),
+    # non-blocking note (1): `key = value` sets the value to `=` - the skip class must not eat
+    # a spaced `=` as if it were the assignment
+    ("hookspath_eq_with_spaces", bash("git config core.hooksPath = .githooks")),
+    # commit-B gate round 4 (gate_20260906-190533) F1 HIGH: a quote right after the arming value
+    # was a terminator, but the shell strips quotes - `.githooks"x"` reaches git as .githooksx
+    ("hookspath_quote_adjacent_suffix", bash('git config core.hooksPath ".githooks"x')),
+    ("hookspath_inline_quote_adjacent_suffix", bash('git -c core.hooksPath=.githooks"x" commit -m x')),
+    ("hookspath_single_quote_adjacent_suffix", bash("git config core.hooksPath .githooks'x'")),
+    ("hookspath_canonical_quote_adjacent_suffix", bash('git config core.hooksPath C:/Users/User/source/repos/Tools/adversary-gate/hooks"x"')),
+    # commit-B gate round 9 (gate_20260906-204139) HIGH: a quote followed by a SPACE was taken
+    # as the value's end - the shell glues `.githooks" "x` into `.githooks x`, hookless. A
+    # closing quote is accepted only at the very end of the segment.
+    ("hookspath_quote_space_glue", bash('git config core.hooksPath .githooks" "x')),
+    ("hookspath_inline_quote_space_glue", bash('git -c core.hooksPath=.githooks" "x commit -m pwn')),
+    ("hookspath_single_quote_space_glue", bash("git config core.hooksPath .githooks' 'x")),
+    ("hookspath_quoted_then_more", bash('git config core.hooksPath ".githooks" x')),
+    # commit-B gate round 4 (gate_20260906-190533) F2: literal-free GLOBAL config writes - the
+    # owner's machine-wide arming is off-limits to the harness in EVERY spelling
+    ("global_remove_section", bash("git config --global --remove-section core")),
+    ("global_include_path", bash("git config --global include.path C:/tmp/x.cfg")),
+    ("global_unset_all", bash("git config --global --unset-all core.hooksPath")),
+    ("global_edit", bash("git config --global --edit")),
+    ("system_write", bash("git config --system core.hooksPath .githooks")),
+    ("config_file_flag", bash("git config --file C:/Users/User/.gitconfig core.hooksPath x")),
+    ("config_includeif", bash("git config includeIf.gitdir:/c/.path C:/tmp/x.cfg")),
+    ("git_config_global_env", bash("GIT_CONFIG_GLOBAL=/tmp/empty git commit -m x")),
+    ("git_config_nosystem_env", bash("GIT_CONFIG_NOSYSTEM=1 git commit -m x")),
+    ("git_config_params_env", bash("GIT_CONFIG_PARAMETERS=\"'core.hooksPath=/dev/null'\" git commit -m x")),
+    # F3: an NTFS 8.3 short-name alias (ADVERS~1) resolves to the dispatcher dir too
+    ("dispatcher_83_alias_bash", bash("rm C:/Users/User/source/repos/Tools/ADVERS~1/hooks/pre-commit")),
+    ("dispatcher_83_alias_user", bash(r"del C:\Users\USER~1\source\repos\Tools\adversary-gate\hooks\pre-push")),
+    ("dispatcher_83_alias_write", ftool("Write", r"C:\Users\User\source\repos\Tools\ADVERS~1\hooks\pre-commit")),
+    ("livehooks_83_alias_write", ftool("Edit", r"C:\repo\.git\HOOKS~1\pre-commit")),
+    # commit-B gate round 7 (gate_20260906-195433) HIGH: the alias segment may carry a trailing
+    # dot/space run too (Win32 trims it) - the 8.3 rule must fold it like the literal rule does
+    ("dispatcher_83_alias_trailing_dot", bash("rm C:/Users/User/source/repos/Tools/ADVERS~1./hooks/pre-commit")),
+    ("dispatcher_83_alias_trailing_dots", bash("rm C:/Users/User/source/repos/Tools/ADVERS~1../hooks/pre-commit")),
+    ("dispatcher_83_alias_trailing_space_quoted", bash('rm "C:/Users/User/source/repos/Tools/ADVERS~1 /hooks/pre-commit"')),
+    # commit-B gate round 8 (gate_20260906-201038) HIGH: quote-PAIR splitting inside a token -
+    # the shell strips the quotes, the literal classes exclude them, the token falls apart for
+    # every path rule; rules are evaluated on a de-quoted view as well (deny-on-doubt)
+    ("dispatcher_quote_split_hooks", bash('rm C:/Users/User/source/repos/Tools/adversary-gate/"hooks"/pre-commit')),
+    ("dispatcher_quote_split_reviewer_trigger", bash('rm "C:/Users/User/source/repos/Tools/adversary-gate/"hooks/pre-commit')),
+    ("dispatcher_quote_split_gate", bash("rm C:/Users/User/source/repos/Tools/adversary-\"gate\"/hooks/pre-commit")),
+    ("dispatcher_empty_quote_pair", bash('rm C:/Users/User/source/repos/Tools/adversary-gate/""hooks/pre-commit')),
+    ("dispatcher_83_quote_split", bash('rm "C:/Users/User/source/repos/Tools/ADVERS~1/"hooks/pre-commit')),
+    ("hookspath_key_quote_split", bash('git -c core.hooks"Path=/dev/null" commit -m x')),
+    ("hookspath_key_single_quote_split", bash("git config core.hooks'Path' /dev/null")),
+    ("livehooks_quote_split", bash('rm .git/"hooks"/pre-commit')),
+    ("adversary_quote_split", bash("echo x > .adv\"ersary\"/clearance.json")),
     ("hookspath_traversal", bash('git config core.hooksPath ".githooks/../evil"')),
     ("noverify_var_smuggle", bash("FLAG=--no-verify\ngit commit $FLAG -m x")),
     ("fast_import", bash("git fast-import < dump")),
@@ -195,6 +292,40 @@ PASS_ = [
     ("plain_commit", bash('git commit -m "feat: normal commit"')),
     ("commit_message_n_word", bash('git commit -m "clean and tidy"')),
     ("arming_config", bash("git config core.hooksPath .githooks")),
+    # universal arming (2026-09-06): the machine-wide canonical dispatcher dir is the second
+    # arming spelling (install_gate.py writes it); forward or back slashes, trailing slash, inline
+    ("arming_config_canonical", bash("git config core.hooksPath C:/Users/User/source/repos/Tools/adversary-gate/hooks")),
+    ("arming_config_canonical_backslash", bash(r"git config core.hooksPath C:\Users\User\source\repos\Tools\adversary-gate\hooks")),
+    ("arming_config_canonical_trailing_slash", bash("git config core.hooksPath C:/Users/User/source/repos/Tools/adversary-gate/hooks/")),
+    ("arming_inline_canonical", bash("git -c core.hooksPath=C:/Users/User/source/repos/Tools/adversary-gate/hooks commit -m x")),
+    # the dispatcher covenant must not catch the suite's own tooling or its parent dir
+    ("dispatcher_selftest_run", bash("python C:/Users/User/source/repos/Tools/adversary-gate/hooks_selftest.py")),
+    ("dispatcher_parent_dir_listing", bash("ls C:/Users/User/source/repos/Tools/adversary-gate")),
+    ("dispatcher_installer_run", bash("python C:/Users/User/source/repos/Tools/adversary-gate/install_gate.py --census")),
+    ("edit_installer_source", ftool("Edit", r"C:\Users\User\source\repos\Tools\adversary-gate\install_gate.py")),
+    # the dispatcher rule shares the .git/hooks rule's disjoint-alternatives class: linear time
+    ("dispatcher_regex_dot_slash_run_is_linear", bash("echo adversary-gate/" + "./" * 40)),
+    # git's own ~N revision syntax is not an 8.3 alias
+    ("git_diff_head_tilde", bash("git diff HEAD~1 -- src/main.py")),
+    ("git_log_tilde_range", bash("git log --oneline HEAD~3..HEAD")),
+    ("config_local_read", bash("git config --local user.name")),
+    # commit-B gate round 6 (gate_20260906-193152) note 3: `.githooks/` with a trailing slash is
+    # a legitimate arming spelling (git resolves it identically), like the canonical dir's
+    ("arming_config_githooks_trailing_slash", bash("git config core.hooksPath .githooks/")),
+    ("arming_config_githooks_quoted_at_end", bash('git config core.hooksPath ".githooks"')),
+    ("arming_config_canonical_quoted_at_end", bash('git config core.hooksPath "C:/Users/User/source/repos/Tools/adversary-gate/hooks"')),
+    # note 2, DOCUMENTED RESIDUAL (pinned on purpose): a two-step reference that never spells
+    # the dispatcher dir in one segment is not caught by a text guard - the same residual the
+    # live-hook-dir rule has always carried (`cd .git && rm hooks/pre-commit`); the backstops
+    # are the dispatcher's own self-check (an edited dispatcher fails closed), the census
+    # (a deleted dispatcher reads dangling), and the audit tripwire for committed tampers.
+    ("dispatcher_two_step_cd_residual_documented", bash("cd C:/Users/User/source/repos/Tools/adversary-gate && ls hooks")),
+    ("dispatcher_regex_long_dot_run_is_linear", bash("echo adversary-gate/" + "." * 80)),
+    # commit-B gate round 8 (gate_20260906-201038) MEDIUM: a long single token no earlier rule
+    # matches must not send the 8.3 rule quadratic (run_guard's 30 s timeout turns a hang into
+    # a FAIL); 300 KB of plain token text
+    ("alias_regex_long_token_is_linear", bash("python build.py " + "A" * 300000)),
+    ("alias_regex_long_tilde_token_is_linear", bash("echo " + "x~1" * 50000)),
     ("notes_show", bash("git notes --ref refs/notes/adversary show HEAD")),
     ("gate_run", bash("python C:/Users/User/source/repos/Tools/adversary-gate/adversary_gate.py run")),
     ("gate_status", bash("python adversary_gate.py status")),   # gate tool: no ".adversary" literal

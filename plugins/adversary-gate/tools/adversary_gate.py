@@ -22,7 +22,8 @@ Commands:
   status                      show staged files vs clearance state
 
 Escape hatch (auditable, one-shot, for the OWNER's emergencies - not the agent's):
-  a file .adversary/OVERRIDE containing a written reason lets ONE commit through with a loud
+  a file .adversary/OVERRIDE containing a written reason lets ONE commit through (and a commit
+  carrying its OVERRIDE note passes the push guard's secret barrier with a warning) with a loud
   warning, then is deleted. Using it without Damien's explicit say-so is a protocol violation.
 
 Key: OPENROUTER_API_KEY env (never printed). Artifacts land in .adversary/reviews/ (the
@@ -30,6 +31,7 @@ directory is gitignored - transient gate state, not history; durable verdicts st
 the repo's review archives by the normal protocol).
 """
 import argparse
+import ast
 import datetime
 import hashlib
 import json
@@ -38,6 +40,7 @@ import re
 import subprocess
 import sys
 import time
+import tempfile
 import urllib.error
 import urllib.request
 try:                                  # vendored beside this file: the docs half of the gate
@@ -57,6 +60,16 @@ CODE_EXTS = {".py", ".js", ".json", ".ts", ".jsx", ".tsx", ".html", ".css", ".ps
 # CI audit workflow is enforcement config too - editing it un-gated is the same hole
 # (layered-enforcement review 2026-08-31).
 GATED_PREFIXES = (".githooks/", ".github/workflows/")
+# 2026-09-06 (universal arming): an extensionless git HOOK file is code WHEREVER it lives - the
+# canonical shims in Tools/adversary-gate/ (the single source of every vendored .githooks/ shim)
+# and the machine-wide dispatchers in adversary-gate/hooks/ were never in the staged-code list,
+# so the bytes every repo execs could be edited un-reviewed. Mirrored in adversary_audit.py.
+HOOK_NAMES = ("pre-commit", "post-commit", "pre-push")
+# ...confined to commits strictly AFTER the per-repo rules epoch the installer records when it
+# vendors a HOOK_NAMES-aware auditor (`hook-names <sha>`): earlier commits touched hook files
+# while they were docs-class and carry no note by design (gate round 2 MEDIUM). Staging (a new
+# commit) always applies the rule; only the durable-side walkers consult the epoch.
+RULES_EPOCH_FILE = os.path.join(".githooks", "adversary_rules_epoch")
 NOTES_REF = "refs/notes/adversary"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -82,8 +95,9 @@ MAX_TOTAL_BYTES = 900_000         # whole prompt budget (hy3 ctx 262k tokens)
 # all, and (b) any secret in a reviewed diff was transmitted off-machine. Both proven live:
 # EV-023 (a gateway root / AP admin / printer password pasted into a memory .md) was caught
 # only because .py files were co-staged, and the catch itself shipped the plaintext creds to
-# the reviewer API. This pre-scan runs LOCALLY on EVERY staged file first: it blocks on
-# secret material without transmitting anything, and it is not extension-gated.
+# the reviewer API. This pre-scan runs LOCALLY on EVERY staged file first and is not
+# extension-gated. Since the owner ruling of 2026-09-07 (EV-046) it WARNS at commit time and
+# every matched value is SCRUBBED out of the transmit payload; the push guard is the barrier.
 # HONEST LIMIT (no-silent-caps): it is pattern-based - known key prefixes, private-key
 # blocks, sshpass/URL creds, and secret-named assignments carrying a high-entropy value. A
 # bare dictionary-word password sitting in prose (no assignment, no sshpass/URL context) is
@@ -106,10 +120,19 @@ _SECRET_LITERALS = [
 _SECRET_ASSIGN = re.compile(
     r"(?P<key>[A-Za-z0-9_.\-]{0,64}(?:password|passwd|pwd|secret|api[_-]?key|token|bearer)"
     r"[A-Za-z0-9_.\-]{0,64})\s*[=:]\s*(?P<q>['\"])?(?P<v>[^\s'\"#,;)]+)", re.I)
+# Vendor-DOCUMENTED example credentials: they match a hard pattern by construction but are
+# public by definition (AWS's own docs). Skipped by both scanners so a tutorial cannot become
+# permanently unpushable (gate catch gate_20260907-171348, advisory).
+_DOCUMENTED_EXAMPLES = {"AKIA" + "IOSFODNN7EXAMPLE"}
 _SECRET_PLACEHOLDER = re.compile(
     r"your|example|changeme|placeholder|redact|dummy|sample|<[^>]*>|\.\.\.|xxx|"
     r"^\*+$|^(.)\1{4,}$|^(?:true|false|yes|no|none|null|n/?a|present|set|unset|todo|"
-    r"enabled?|disabled?|undefined)$", re.I)
+    r"enabled?|disabled?|undefined)$|"
+    # the bare NAME of a secret used as its own value is the tutorial idiom (a URL whose
+    # credential part is the word password; the ssh password flag given the word secret) -
+    # never a real credential; a trailing punctuation char is tolerated
+    r"^['\"]?(?:password|passwd|pwd|pass|secret|token|api[_-]?key|user(?:name)?)['\"]?[)\],.;:]?$",
+    re.I)
 
 
 def _looks_secret(v, quoted=False):
@@ -157,6 +180,8 @@ def _scan_one_text(text, max_hits):
                 # skip placeholders AND shell/env variable references ($PW, ${PW}, %PW%,
                 # <PW>) - `sshpass -p "$PW"` is safe usage, not a literal secret.
                 if v and (_SECRET_PLACEHOLDER.search(v) or re.match(r"^['\"]?[\$%{<]", v)):
+                    continue
+                if m.group(0) in _DOCUMENTED_EXAMPLES:
                     continue
                 matched = label
                 break
@@ -210,8 +235,8 @@ def _scan_staged_secrets(max_hits=50):
     Binary (NUL in the first 8 KB) and >25 MB blobs are skipped exactly as before - the
     bound _staged_doc_files applies - so the '>25MB - NOT scanned by any layer' warning
     stays true and a genuinely binary file is never diffed as text. Runs entirely locally
-    - nothing is transmitted. The transmit guard in cmd_run additionally scans the exact
-    payload (removed lines included) - _scan_text_secrets."""
+    - nothing is transmitted. cmd_run additionally SCRUBS the exact payload (removed lines
+    included) before transmission - _scrub_text."""
     hits = []
     for path in _all_staged_files():
         try:
@@ -236,18 +261,146 @@ def _scan_staged_secrets(max_hits=50):
 def _scan_text_secrets(text, max_hits=50):
     """Scan arbitrary text (the EXACT payload about to be transmitted) for secret material.
     Returns [("<payload>", line, label)] - covers removed lines, diff hunks, and an
-    oversized-and-omitted file's hunks, none of which appear in _scan_staged_secrets."""
+    oversized-and-omitted file's hunks, none of which appear in _scan_staged_secrets.
+    Caller: reviewed_write.py (the pre-write broker) refuses transmission on any hit. Removed by
+    8245433 (2026-09-07) while that caller still used it - the gate cleared the removal because
+    the caller was not staged; restored 2026-09-09 and guarded by _removed_symbol_callers."""
     return [("<payload>", ln, label) for ln, label in _scan_one_text(text, max_hits)]
 
 
-def _print_secret_block(hits, stream, extra):
-    stream.write("\nADVERSARY GATE: secret material detected in the staged change - %s.\n"
-                 "BLOCKED locally; values are not printed:\n" % extra)
+_EXOTIC_BREAKS = re.compile("([\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029])")   # str.splitlines() minus \n
+
+
+def _scrub_line(line):
+    """(scrubbed_line, [label per redaction]) for one '\\n'-delimited payload line. The line is
+    scrubbed per str.splitlines() SEGMENT (a lone CR / VT / FF / NEL / LS / PS / FS-GS-RS also
+    ends a segment) so the 4096-char heuristic gate and the value search see the same units
+    the old per-line scanner saw - a >4096-char physical line hiding an assignment secret
+    behind a lone CR would otherwise skip the heuristic and ship it (gate catch
+    gate_20260907-165431)."""
+    parts = _EXOTIC_BREAKS.split(line)
+    labels = []
+    for k in range(0, len(parts), 2):          # even indexes are segments, odd the breaks
+        parts[k], labs = _scrub_segment(parts[k])
+        labels.extend(labs)
+    return "".join(parts), labels
+
+
+def _scrub_segment(line):
+    """(scrubbed_segment, [label per redaction]): EVERY secret-shaped VALUE in `line` replaced by
+    <REDACTED:label>, so a false positive costs nothing and a true positive never leaves the
+    machine. Literal patterns first (the value group when the pattern has one, else the whole
+    match), then the assignment heuristic on lines <= 4096 chars (ReDoS parity with
+    _scan_one_text). The search RESUMES after each match - a placeholder / variable reference /
+    non-secret value is skipped, a redaction is stepped over - so the second and later values on
+    one line are reached too (gate catch gate_20260907-161313: a `break` on the first
+    non-secret match left every later value on the line in plaintext). Bounded per pattern."""
+    labels = []
+    for label, rx in _SECRET_LITERALS:
+        pos = 0
+        for _ in range(32):
+            m = rx.search(line, pos)
+            if not m:
+                break
+            v = m.groupdict().get("v")
+            if (v and (_SECRET_PLACEHOLDER.search(v) or re.match(r"^['\"]?[\$%{<]", v))) \
+                    or m.group(0) in _DOCUMENTED_EXAMPLES:
+                pos = m.end()                      # skip it, keep scanning the line
+                continue
+            tag = "<REDACTED:%s>" % label
+            if label == "private-key-block":
+                # key material can follow the header on the SAME line (a one-line PEM, or a
+                # header glued to its first base64 chunk): redact the rest of the line (gate
+                # catch gate_20260907-163540 - the header alone was replaced, the tail shipped)
+                line = line[:m.start()] + tag
+                labels.append(label)
+                break
+            if v:
+                line = line[:m.start("v")] + tag + line[m.end("v"):]
+                pos = m.start("v") + len(tag)
+            else:
+                line = line[:m.start()] + tag + line[m.end():]
+                pos = m.start() + len(tag)
+            labels.append(label)
+        else:                                      # cap reached: it bounds WORK, never leakage
+            if rx.search(line, pos):
+                line = line[:pos] + "<REDACTED:%s:cap - rest of line>" % label
+                labels.append(label)
+    if len(line) <= 4096:
+        pos = 0
+        for _ in range(32):
+            m = _SECRET_ASSIGN.search(line, pos)
+            if not m:
+                break
+            if not _looks_secret(m.group("v"), bool(m.group("q"))):
+                pos = m.end()                      # a placeholder / code expression: skip
+                continue
+            tag = "<REDACTED:secret-assignment>"
+            line = line[:m.start("v")] + tag + line[m.end("v"):]
+            pos = m.start("v") + len(tag)
+            labels.append("secret-assignment(%s)" % m.group("key")[:24])
+        else:                                      # cap: bounds WORK, never leakage - a real
+            if _SECRET_ASSIGN.search(line, pos):   # value past the 32nd match must not ship
+                line = line[:pos] + "<REDACTED:secret-assignment:cap - rest of line>"
+                labels.append("secret-assignment(cap)")
+    return line, labels
+
+
+_PEM_BEGIN = re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----")
+_PEM_END = re.compile(r"-----END (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----")
+_PEM_MAX_LINES = 200        # the longest real PEM body is ~50 lines (RSA-4096); a BEGIN with no
+#                             END within this many lines is a fragment, not a key: redaction
+#                             resumes per line so the rest of the review payload survives
+#                             (gate catch gate_20260907-163011: an unterminated header devoured
+#                             every later hunk, file and note and the reviewer cleared a gutted
+#                             payload - over-redaction fails OPEN, so it is bounded and warned)
+
+
+def _scrub_text(text):
+    """(scrubbed_text, [(line_no, label) per redacted VALUE]) over the EXACT payload about to
+    be transmitted - removed diff lines, hunks and the author's context included. Newlines
+    are preserved verbatim (split on '\\n' only) so the reviewer's line references hold.
+    A private-key BLOCK spans lines: once its BEGIN header is seen, every line through the
+    matching END line is replaced wholesale - the base64 body is the secret, the header only
+    announces it (gate catch gate_20260907-162135) - bounded by _PEM_MAX_LINES, after which a
+    'private-key-block:unterminated' hit is recorded and per-line scrubbing resumes."""
+    out, hits = [], []
+    in_block = 0                                   # lines redacted inside the current block
+    for i, line in enumerate(text.split("\n"), 1):
+        if in_block:
+            if in_block >= _PEM_MAX_LINES:
+                hits.append((i, "private-key-block:unterminated"))
+                in_block = 0                       # fall through: scrub this line normally
+            else:
+                out.append("<REDACTED:private-key-block>")
+                hits.append((i, "private-key-block"))
+                in_block = 0 if _PEM_END.search(line) else in_block + 1
+                continue
+        s, labels = _scrub_line(line)
+        if "private-key-block" in labels:
+            # arm the block unless the ORIGINAL line already closes it after its BEGIN (a
+            # one-line PEM); the scrubbed line has lost its tail, so judge the original
+            b, e = _PEM_BEGIN.search(line), _PEM_END.search(line)
+            if not (b and e and e.start() > b.start()):
+                in_block = 1
+        hits.extend((i, lab) for lab in labels)
+        out.append(s)
+    return "\n".join(out), hits
+
+
+def _print_secret_warning(hits, stream, where):
+    """Commit-time secret hits WARN (owner ruling 2026-09-07, the 'warn version'): values are
+    never printed, the commit is not blocked, the transmit payload is scrubbed, and the push
+    guard (_push_secret_barrier) is the barrier: a hard literal refuses the push, the
+    heuristic only ever warns."""
+    stream.write("\nADVERSARY GATE: WARNING - secret-shaped material in the staged change (%s). "
+                 "Values are not printed and the commit is NOT blocked (owner ruling "
+                 "2026-09-07); the review payload is scrubbed before transmission. The push "
+                 "guard scans every outgoing commit: a secret LITERAL refuses the push, "
+                 "heuristic matches only warn - remove a real value before pushing.\n" % where)
     for path, ln, label in hits:
         stream.write("  %s:%s  %s\n" % (path, ln, label))
-    stream.write("\nRemove the secret and re-stage. (Owner emergencies escape at COMMIT time "
-                 "via a one-shot .adversary/OVERRIDE - never by sending secrets to the "
-                 "reviewer.)\n")
+    stream.write("\n")
 
 
 PROMPT = (
@@ -260,14 +413,30 @@ PROMPT = (
     "claims before; assume nothing. IGNORE style, naming, formatting, and pre-existing "
     "issues the change does not touch or worsen. A REBUTTAL section, when present, is the "
     "author's response to a previous BLOCK - weigh it, verify it, and do not re-raise a "
-    "point it factually settles. End with EXACTLY one line: 'VERDICT: CLEAR' if nothing "
+    "point it factually settles. Repo doctrine you must not re-litigate: a "
+    ".colibri_reviews/_manifest.json row is keyed by the ABSOLUTE source path with a rel "
+    "field and a modes table BY DESIGN (colibri store.py writes it that way) - absolute keys, "
+    "machine paths inside them and a full sha256 in sha are the canonical shape, not findings; "
+    "a second entry for a file that already has one, a files wrapper, or relative-keyed "
+    "wrapperless rows ARE findings (they fragment or hide the record). "
+    "End with EXACTLY one line: 'VERDICT: CLEAR' if nothing "
     "real was found, or 'VERDICT: BLOCK' preceded by your findings (each: severity, file, "
     "line/symbol, trigger, impact). A confident wrong finding wastes the author's time; an "
     "unearned CLEAR ships a bug. Be exact."
 )
 
 
+# Used only while building a review from an immutable index snapshot in this process.
+_REVIEW_BASE = None
+
+
 def _run_git(args, binary=False):
+    args = list(args)
+    if _REVIEW_BASE is not None:
+        if "diff" in args and "--cached" in args:
+            args.insert(args.index("--cached") + 1, _REVIEW_BASE)
+        if args and args[0] == "show" and len(args) > 1 and args[1].startswith("HEAD:"):
+            args[1] = _REVIEW_BASE + args[1][4:]
     # GIT_NO_REPLACE_OBJECTS: a local `git replace <dirty> <innocent>` otherwise makes
     # diff/show read the substituted object graph, so the gate would hash the innocent
     # blob and clear a dirty commit (audit-probe finding). Ignore replace refs.
@@ -296,8 +465,80 @@ def _staged_sha(path):
     return hashlib.sha256(_run_git(["show", ":" + path], binary=True)).hexdigest()
 
 
-def _is_code(path):
-    return path.startswith(GATED_PREFIXES) or os.path.splitext(path)[1].lower() in CODE_EXTS
+def _is_code(path, hook_names=True):
+    return (path.startswith(GATED_PREFIXES) or os.path.splitext(path)[1].lower() in CODE_EXTS
+            or (hook_names and os.path.basename(path) in HOOK_NAMES))
+
+
+_EPOCH_ANCHOR_CACHE = {}
+
+
+def _hook_names_apply(rev):
+    """Mirror of adversary_audit._hook_names_apply for the push guard and the notary: the
+    HOOK_NAMES rule applies to `rev` unless the repo's .githooks/adversary_rules_epoch names a
+    `hook-names <sha>` that `rev` is an ancestor of (or equal to). The anchor judgement
+    (sha, shallow, adds) is memoized per repo root; only the per-rev ancestry test repeats."""
+    root = _repo_root()
+    if root in _EPOCH_ANCHOR_CACHE:
+        sha = _EPOCH_ANCHOR_CACHE[root]
+        if sha is None or sha == "ROOT":
+            return True                                 # no / moved / unreadable / ROOT epoch
+        env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+        return subprocess.run([GIT, "-C", root, "merge-base", "--is-ancestor", rev, sha],
+                              capture_output=True, env=env).returncode != 0
+    # read from HEAD's TREE only (Tools E gate round 1, gate_20260906-223831): working-tree
+    # reads are case-folded / symlink-following, the anchor is exact; an uncommitted epoch =
+    # the rule applies everywhere until it is committed
+    env0 = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+    p_show = subprocess.run([GIT, "-C", root, "show", "HEAD:" + RULES_EPOCH_FILE.replace("\\", "/")],
+                            capture_output=True, env=env0)
+    if p_show.returncode != 0:
+        _EPOCH_ANCHOR_CACHE[root] = None
+        return True
+    sha = None
+    for ln in p_show.stdout.decode("utf-8", "replace").splitlines():
+        parts = ln.split()
+        if len(parts) == 2 and parts[0] == "hook-names":
+            sha = parts[1]
+    if not sha:
+        _EPOCH_ANCHOR_CACHE[root] = None
+        return True
+    if sha == "ROOT":
+        _EPOCH_ANCHOR_CACHE[root] = "ROOT"              # armed at birth: applies everywhere
+        return True
+    # ANCHORED IN HISTORY (mirror of adversary_audit._epoch, deepagents re-vendor gate round 1,
+    # gate_20260906-210758): the recorded sha must be an ancestor of EVERY commit that ever
+    # added the epoch file (order-independent, --full-history: round 2, gate_20260906-214441),
+    # or a later commit could grandfather earlier hook-file commits out of the rule. A moved,
+    # shallow or unreadable epoch = the rule applies everywhere (fail closed).
+    # Anchored to the repo ROOT (`-C root` + a :(top) pathspec) and replace-ref-proof, like the
+    # wrappers (Tools D gate round 1, gate_20260906-212201): a cwd-relative pathspec read
+    # nothing from a subdirectory and trusted the moved sha, and a local `git replace` could
+    # forge the ancestry the anchor tests.
+    env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+
+    def hist(args):
+        return subprocess.run([GIT, "-C", root] + args, capture_output=True, env=env)
+
+    def unsound():
+        _EPOCH_ANCHOR_CACHE[root] = None
+        return True
+
+    p_sh = hist(["rev-parse", "--is-shallow-repository"])
+    if p_sh.returncode != 0 or p_sh.stdout.decode("utf-8", "replace").strip() == "true":
+        return unsound()                                # shallow: ancestry unjudgeable
+    p_log = hist(["log", "--full-history", "--diff-filter=A", "--format=%H", "--",
+                  ":(top)" + RULES_EPOCH_FILE.replace("\\", "/")])
+    if p_log.returncode != 0:
+        return unsound()
+    adds = p_log.stdout.decode("utf-8", "replace").split()
+    if not adds:
+        return unsound()                                # in HEAD's tree yet no add = truncation
+    for add in adds:
+        if hist(["merge-base", "--is-ancestor", sha, add]).returncode != 0:
+            return unsound()
+    _EPOCH_ANCHOR_CACHE[root] = sha
+    return hist(["merge-base", "--is-ancestor", rev, sha]).returncode != 0
 
 
 def _staged_removals():
@@ -428,11 +669,73 @@ def _save_clear(root, data):
 
 
 def _git_ok(args):
-    """True iff the git command succeeds - for existence probes where failure is an answer."""
-    return subprocess.run([GIT] + args, capture_output=True).returncode == 0
+    """True iff the git command succeeds - for existence probes where failure is an answer.
+    Replace refs are ignored like in _run_git: a local `git replace` must not steer a parent
+    probe (gate catch gate_20260907-172339)."""
+    env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+    return subprocess.run([GIT] + args, capture_output=True, env=env).returncode == 0
 
 
-def cmd_check():
+def _profile_temp_dirs():
+    """The OS temp locations a test harness puts throwaway repos in, resolved WITHOUT reading
+    environment variables (TMPDIR/TEMP would let a committer reclassify a real checkout as a
+    fixture - the docket-gate refutation of the first EV-045 proposal). Windows: the
+    LocalAppData known folder + \\Temp (SHGetKnownFolderPath); POSIX: /tmp and /var/tmp."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            # FOLDERID_LocalAppData {F1B32785-6FBA-4FCF-9D55-7B8E7F157091} in GUID byte order
+            fid = ctypes.c_char_p(bytes.fromhex("8527B3F1BA6FCF4F9D557B8E7F157091"))
+            out = ctypes.c_wchar_p()
+            if ctypes.windll.shell32.SHGetKnownFolderPath(fid, 0, None, ctypes.byref(out)) == 0:
+                p = out.value
+                ctypes.windll.ole32.CoTaskMemFree(out)
+                if p:
+                    return [os.path.join(p, "Temp")]
+        except Exception:
+            pass
+        # no silent degradation: the gate keeps running everywhere (safe direction), say so
+        sys.stderr.write("adversary gate: profile Temp folder could not be resolved - fixture "
+                         "repos are NOT skipped this run.\n")
+        return []
+    return ["/tmp", "/var/tmp"]
+
+
+def _git_common_dir_abs():
+    try:
+        d = _run_git(["rev-parse", "--path-format=absolute", "--git-common-dir"]).strip()
+    except SystemExit:
+        return ""
+    return os.path.normcase(os.path.realpath(d)) if d else ""
+
+
+def _fixture_repo():
+    """EV-045 (owner ruling 2026-09-07): a repository whose git dir lives under the profile
+    Temp is a test fixture - the pre-commit review is skipped there (no refusal, no model, no
+    note). Pre-push still runs everywhere, so nothing pushed from such a repo escapes the
+    audit. Disabled under ADVERSARY_SELFTEST=1 (a stricter-only knob) so the selftests' own
+    temp repos stay gated."""
+    if os.environ.get("ADVERSARY_SELFTEST") == "1":
+        return False
+    common = _git_common_dir_abs()
+    if not common:
+        return False
+    for t in _profile_temp_dirs():
+        t = os.path.normcase(os.path.realpath(t))
+        try:
+            if os.path.commonpath([t, common]) == t:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def cmd_check(auto_review=False):
+    if _fixture_repo():
+        sys.stderr.write("adversary gate: repository under the profile Temp dir - pre-commit "
+                         "review skipped (EV-045, owner ruling 2026-09-07); the push guard "
+                         "still audits anything pushed from it.\n")
+        return 0
     root = _repo_root()
     files = _staged_code_files()   # merges are NOT exempt: a merge can carry un-gated
     # commits (adversary finding, gate birth review 2026-08-30) - the staged result is
@@ -440,18 +743,12 @@ def cmd_check():
     removals = _staged_removals()
     ov = os.path.join(_adv_dir(root), "OVERRIDE")
     override = os.path.isfile(ov)
-    # LOCAL secret pre-scan - the ADDED lines of ALL staged files (any extension), so a docs-only
-    # commit is no longer waved through, and a secret is caught WITHOUT the diff ever
-    # leaving the machine. The owner's one-shot OVERRIDE still escapes a false positive.
+    # LOCAL secret pre-scan - the ADDED lines of ALL staged files (any extension). It WARNS
+    # (owner ruling 2026-09-07): nothing blocks here, the OVERRIDE is not involved, and the
+    # review payload is scrubbed before it leaves the machine.
     secret_hits = _scan_staged_secrets()
-    if secret_hits and not override:
-        sys.stderr.write("\nADVERSARY GATE: commit REFUSED - staged content carries secret "
-                         "material (detected locally; nothing was transmitted):\n")
-        for path, ln, label in secret_hits:
-            sys.stderr.write("  %s:%s  %s\n" % (path, ln, label))
-        sys.stderr.write("\nRemove the secret from the staged bytes and re-stage. Values are "
-                         "not printed. (Owner emergencies: a one-shot .adversary/OVERRIDE.)\n\n")
-        return 1
+    if secret_hits:
+        _print_secret_warning(secret_hits, sys.stderr, "commit-time pattern floor")
     # DOCS half of the domain division (2026-09-03): staged doc files' ADDED content is
     # reviewed by the LOCAL model (docscan), ON-MACHINE, never sent to the external reviewer.
     # It catches prose / dictionary-word secrets the pattern floor misses. Runs EVEN under
@@ -463,7 +760,6 @@ def cmd_check():
         sys.stderr.write("adversary gate: doc %s is >25MB - NOT scanned by any layer (pattern "
                          "floor and the docs model both skip it; docs are not sent to the "
                          "external reviewer). Review it manually.\n" % f)
-    docs_blocked = False
     if doc_files:
         try:
             res = (docscan.scan(_staged_doc_added_text(doc_files)) if docscan
@@ -473,13 +769,12 @@ def cmd_check():
             # docscan bug degrades loudly (pattern floor + code gate still enforce).
             res = {"status": "degraded", "detail": "docs scan crashed: %s" % (str(e)[:150])}
         if res["status"] == "block":
-            docs_blocked = True
-            if not override:
-                sys.stderr.write("\nADVERSARY GATE: commit REFUSED - the local docs reviewer "
-                                 "flagged a real secret in staged documentation (%s). Values "
-                                 "are not printed; open the doc to find it, or (owner) use a "
-                                 "one-shot .adversary/OVERRIDE.\n\n" % res.get("detail", ""))
-                return 1
+            sys.stderr.write("\nADVERSARY GATE: WARNING - the local docs reviewer flagged "
+                             "possible secret material in staged documentation (%s). Values "
+                             "are not printed and the commit is NOT blocked (owner ruling "
+                             "2026-09-07); the push guard re-runs the docs reviewer over "
+                             "outgoing docs and refuses the push on a block.\n\n"
+                             % res.get("detail", ""))
         elif res["status"] == "degraded":
             sys.stderr.write("adversary gate: docs SEMANTIC review SKIPPED (%s) - the pattern "
                              "floor ran, but a prose/dictionary-word secret could pass. Install "
@@ -487,26 +782,10 @@ def cmd_check():
         elif res.get("capped"):
             sys.stderr.write("adversary gate: docs scan CAPPED (%s) - the tail was NOT "
                              "semantically scanned.\n" % res.get("detail", ""))
-    # the OVERRIDE is genuinely USED only if it bypassed a real block (a secret hit or a docs
-    # block); a routine CLEAN docs commit must NOT consume the owner's one-shot hatch.
-    used_override = override and (bool(secret_hits) or docs_blocked)
+    # Secrets and docs blocks never block a commit any more (owner ruling 2026-09-07), so the
+    # OVERRIDE is only ever consumed by a CODE-clearance bypass below; a docs-only commit -
+    # clean or warned - leaves the owner's one-shot hatch untouched.
     if not files and not removals:
-        # docs/manifests-only: no code clearance to check. A docs-only commit is never
-        # notarized (cmd_record returns early), so an OVERRIDE that ACTUALLY bypassed a secret
-        # hit or a docs block records a docs_only override_used.json (staged {}) as a durable
-        # audit trail; cmd_record refuses to match a docs_only entry to any code commit.
-        if used_override:
-            reason = open(ov, encoding="utf-8", errors="replace").read().strip()
-            sys.stderr.write("\n!!! ADVERSARY GATE OVERRIDDEN (one-shot, docs-only) !!!\n"
-                             "reason on file: %s\nThis is auditable.\n\n"
-                             % (reason[:300] or "(none given)"))
-            # durable record: staged is {} (a docs-only commit is never notarized) and the
-            # docs_only flag makes `record` refuse to match it to any code commit's blobs.
-            _save_json(root, "override_used.json",
-                       {"reason": reason[:2000],
-                        "when": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
-                        "staged": {}, "docs_only": True})
-            os.remove(ov)
         return 0                                          # docs/manifests pass free
     if override:
         reason = open(ov, encoding="utf-8", errors="replace").read().strip()
@@ -536,6 +815,14 @@ def cmd_check():
             bad.append((key, "stale" if row else "unreviewed (code removal)"))
     if not bad:
         return 0
+    if auto_review:
+        print("ADVERSARY GATE: requesting automatic independent review of staged changes.",
+              file=sys.stderr, flush=True)
+        result = cmd_run(DEFAULT_MODEL, "")
+        if result != 0:
+            return result
+        # Never loop/retry after BLOCK or staging drift; recheck the caller's real index.
+        return cmd_check()
     sys.stderr.write("\nADVERSARY GATE: commit REFUSED - staged code lacks a fresh "
                      "adversarial clearance:\n")
     for f, why in bad:
@@ -695,7 +982,157 @@ def _call_xai(model, user_content, timeout):
     return "\n".join(texts), (d.get("usage", {}) if isinstance(d, dict) else {})
 
 
+def _review_head():
+    env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+    result = subprocess.run([GIT, "rev-parse", "--verify", "--quiet", "HEAD"],
+                            capture_output=True, env=env)
+    if result.returncode == 0:
+        return result.stdout.decode("ascii").strip()
+    if result.returncode == 1:
+        # An unborn symbolic branch has an empty base. Other failures stay fail-closed.
+        _run_git(["symbolic-ref", "-q", "HEAD"])
+        return EMPTY_TREE
+    raise SystemExit("ADVERSARY GATE: cannot resolve the review base.")
+
+
 def cmd_run(model, context):
+    """Review frozen index/base inputs, then refuse release if the caller moved on."""
+    global _REVIEW_BASE
+    root = _repo_root()
+    base = _review_head()
+    tree = _run_git(["write-tree"]).strip()
+    original_index = os.environ.get("GIT_INDEX_FILE")
+    previous_base = _REVIEW_BASE
+    with tempfile.TemporaryDirectory(prefix="review-index-", dir=_adv_dir(root)) as scratch:
+        try:
+            os.environ["GIT_INDEX_FILE"] = os.path.join(scratch, "index")
+            _run_git(["read-tree", tree])
+            _REVIEW_BASE = base
+            result = _cmd_run_snapshot(model, context)
+        finally:
+            _REVIEW_BASE = previous_base
+            if original_index is None:
+                os.environ.pop("GIT_INDEX_FILE", None)
+            else:
+                os.environ["GIT_INDEX_FILE"] = original_index
+    if result == 0 and (base != _review_head() or tree != _run_git(["write-tree"]).strip()):
+        print("ADVERSARY GATE: staging or HEAD changed during review; commit REFUSED. "
+              "Any saved clearance covers only the reviewed snapshot.", file=sys.stderr)
+        return 1
+    return result
+
+
+def _module_level_names(src):
+    """Module-level def / async def / class names of a Python source, or None when it does not
+    parse (the caller decides what None means for its side)."""
+    try:
+        tree = ast.parse(src)
+    except (SyntaxError, ValueError):
+        return None
+    return {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+
+
+def _staged_python_pairs():
+    """[(old_path, new_path)] for every staged .py: M/T keep their path, R carries the OLD path
+    (its HEAD blob is the one whose symbols may vanish), A has no old blob (old_path None), D has
+    no new blob (new_path None: every symbol it defined is removed - a whole-content rename is
+    reported by git as D+A, and a plain `git rm` is the same hole); a copy (C) removes nothing."""
+    out = _run_git(["diff", "--cached", "--name-status", "-M", "-z", "--diff-filter=ACDMRT"])
+    toks = out.split("\0")
+    pairs, i = [], 0
+    while i < len(toks):
+        st = toks[i]
+        if not st:
+            i += 1
+            continue
+        if st[0] in ("R", "C"):
+            old, new = toks[i + 1], toks[i + 2]
+            i += 3
+            if st[0] == "C":
+                continue
+        else:
+            old = new = toks[i + 1]
+            i += 2
+            if st[0] == "A":
+                old = None
+            elif st[0] == "D":
+                new = None
+        if _is_py(old) or _is_py(new):
+            pairs.append((old, new))
+    return pairs
+
+
+def _is_py(path):
+    return bool(path) and path.lower().endswith(".py")
+
+
+def _removed_symbol_callers():
+    """DETERMINISTIC, LOCAL, FAIL-CLOSED: [(caller_path, line, name, defining_path)] for every
+    module-level def/class that a staged .py REMOVES (present in its HEAD blob, absent from its
+    index blob) while a tracked .py OUTSIDE the staged set still references the name (an ast
+    Name or Attribute, or an import binding `from m import name` - a comment or docstring
+    mention does not count). The hole this closes: Tools 8245433 (2026-09-07) removed
+    adversary_gate._scan_text_secrets while reviewed_write.py still called it, and the review
+    CLEARed - the reviewer only ever sees the staged files, so no prompt can see an unstaged
+    caller; only arithmetic over the frozen index can. A new blob that does not parse, a deleted
+    module, or a rename to a non-.py path counts as removing every old name. Names are matched
+    UNQUALIFIED: an unrelated same-named symbol elsewhere is reported too, so this over-refuses
+    rather than under-refuses (stage that file or keep the name). The tracked listing is
+    root-anchored (`ls-files --full-name -- :/`) because a manual run from a subdirectory must
+    see callers everywhere (gate catch gate_20260909-140534: a cwd-scoped listing was fail-open).
+    Runs under the review's frozen index (GIT_INDEX_FILE) and review base, so the reviewed
+    snapshot is what is compared. cmd_check inherits the guarantee: no clearance can exist
+    without a passing run."""
+    pairs = _staged_python_pairs()
+    staged = {new for _, new in pairs if new} | {old for old, _ in pairs if old}
+    removed = {}                                    # name -> defining (old) path
+    for old, new in pairs:
+        if old is None:
+            continue
+        old_names = _module_level_names(_run_git(["show", "HEAD:" + old]))
+        if not old_names:
+            continue
+        new_names = _module_level_names(_run_git(["show", ":" + new])) if _is_py(new) else set()
+        for name in old_names - (new_names or set()):
+            removed.setdefault(name, old)
+    if not removed:
+        return []
+    hits = []
+    tracked = [f for f in _run_git(["ls-files", "-z", "--full-name", "--", ":/"]).split("\0")
+               if _is_py(f) and f not in staged]
+    for path in tracked:
+        try:
+            tree = ast.parse(_run_git(["show", ":" + path]))
+        except (SyntaxError, ValueError):
+            continue                                # an unparsable bystander cannot be a caller
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                names = [node.id]
+            elif isinstance(node, ast.Attribute):
+                names = [node.attr]
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                names = [a.name.split(".")[-1] for a in node.names]   # `from m import gone`, re-exports
+            else:
+                continue
+            for name in names:
+                if name in removed:
+                    hits.append((path, node.lineno, name, removed[name]))
+    return sorted(set(hits))
+
+
+def _print_removed_symbol_refusal(hits, stream):
+    stream.write("\nADVERSARY GATE: REFUSED before review - the staged change REMOVES module-level "
+                 "symbol(s) that tracked code outside the staged set still references (the reviewer "
+                 "never sees unstaged callers; Tools 8245433 shipped exactly this hole):\n")
+    for path, line, name, where in hits[:50]:
+        stream.write("  %s:%d  references %s (removed from %s)\n" % (path, line, name, where))
+    if len(hits) > 50:
+        stream.write("  ... %d more\n" % (len(hits) - 50))
+    stream.write("Fix: stage the callers with the reference removed (or re-pointed), or keep the "
+                 "symbol. No clearance is written.\n")
+
+
+def _cmd_run_snapshot(model, context):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")   # before ANY print
     except Exception:
@@ -705,15 +1142,18 @@ def cmd_run(model, context):
     # a secret introduced by this change is caught and NOT sent to the external reviewer.
     secret_hits = _scan_staged_secrets()
     if secret_hits:
-        _print_secret_block(secret_hits, sys.stdout,
-                            "the staged content was NOT sent to the external reviewer")
-        print("\n=== adversary gate: BLOCK (local secret pre-scan)")
-        return 1
+        _print_secret_warning(secret_hits, sys.stdout, "review-time pattern floor")
     files = _staged_code_files()
     removals = _staged_removals()
     if not files and not removals:
         print("adversary gate: no staged code files - nothing to review.")
         return 0
+    # DETERMINISTIC refusal before any payload exists: a removed module-level symbol with a
+    # live caller outside the staged set (2026-09-09; see _removed_symbol_callers).
+    dangling = _removed_symbol_callers()
+    if dangling:
+        _print_removed_symbol_refusal(dangling, sys.stdout)
+        return 1
     code_paths = files + [k[2:] for k in removals]   # code files + removed code (D:oldpath)
     diff = _diff_paths(["-c", "core.quotepath=false", "diff", "--cached", "--unified=8"],
                        code_paths)   # docs excluded (doctrine); root-anchored + argv-batched
@@ -732,21 +1172,37 @@ def cmd_run(model, context):
     if context:
         parts.append("\nREBUTTAL / AUTHOR NOTES (verify, do not blindly trust):\n" + context + "\n")
     payload = "".join(parts)
-    # LOCAL secret pre-scan #2 - the EXACT payload about to be transmitted, so a secret in a
-    # REMOVED line, a diff hunk, or an oversized-omitted file's hunk (none in scan #1's
-    # new-blob view - e.g. `git rm secret.py`, the very EV-023 remediation flow) can never
-    # reach the external reviewer either.
-    payload_hits = _scan_text_secrets(payload)
-    if payload_hits:
-        _print_secret_block(payload_hits, sys.stdout,
-                            "the review payload was NOT sent to the external reviewer")
-        print("\n=== adversary gate: BLOCK (local secret pre-scan, transmit payload)")
-        return 1
+    # LOCAL SCRUB of the EXACT payload about to be transmitted (owner ruling 2026-09-07): a
+    # secret in a REMOVED line, a diff hunk, an oversized-omitted file's hunk or the author's
+    # own context (none in scan #1's new-blob view - e.g. `git rm secret.py`, the very EV-023
+    # remediation flow) is REDACTED in place, never blocked and never sent. A false positive
+    # (EV-025, EV-046) therefore costs one placeholder in the reviewer's view, not a denial.
+    payload, scrubbed = _scrub_text(payload)
+    if scrubbed:
+        print("adversary gate: scrubbed %d secret-shaped value(s) from the review payload "
+              "before transmission (staged-file hits were warned above; removed-line and "
+              "context hits appear only here)." % len(scrubbed))
+        unterminated = [ln for ln, lab in scrubbed if lab == "private-key-block:unterminated"]
+        if unterminated:
+            print("adversary gate: WARNING - a private-key BEGIN marker with no END within %d "
+                  "lines at payload line(s) %s: the block was redacted up to the cap and "
+                  "scrubbing resumed; the reviewer sees a partially redacted region there."
+                  % (_PEM_MAX_LINES, ", ".join(str(x) for x in unterminated[:5])))
+        # the reviewer must be able to tell a redacted FIXTURE from missing source: say so in
+        # the payload itself (gate catch gate_20260907-163011 judged a scrubbed selftest
+        # header as a broken fixture because nothing told it a tag stands for a literal)
+        payload = ("REDACTION NOTE: %d secret-shaped value(s) in this payload were replaced by "
+                   "<REDACTED:label> tags before transmission. Each tag marks a value in the "
+                   "staged bytes that MATCHED a secret pattern - a real key, a password-shaped "
+                   "value, a test fixture built to that shape, or a false positive. Judge the "
+                   "surrounding code as if a value of that shape were there; never treat a "
+                   "tag as a missing or malformed value.\n\n" % len(scrubbed)) + payload
     text, usage, model = _call_model(model, payload)
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     art = os.path.join(_adv_dir(root), "reviews", "gate_%s.md" % ts)
     with open(art, "w", encoding="utf-8") as fh:
-        fh.write("model: %s | usage: %s | files: %s\n\n%s" % (model, usage, files, text))
+        fh.write("model: %s | usage: %s | scrubbed: %d | files: %s\n\n%s"
+                 % (model, usage, len(scrubbed), files, text))
     lines = text.rstrip().splitlines()
     if not lines:                        # adversary finding (birth review): empty model
         text = "(model returned no content - failing closed)\nVERDICT: BLOCK"   # response must
@@ -785,6 +1241,7 @@ def _changed_code_in_commit(rev):
     rev}, removals {'D:'+old_path: sha256 of the parent blob}). This is the durable-side
     twin of _staged_code_files/_staged_removals - what a note must vouch for."""
     base = rev + "^1" if _git_ok(["rev-parse", "--verify", "--quiet", rev + "^1"]) else EMPTY_TREE
+    hn = _hook_names_apply(rev)
     out = _run_git(["diff", "--name-status", "-M", "-z", base, rev])
     toks = out.split("\0")
     files, removals = {}, {}
@@ -798,23 +1255,199 @@ def _changed_code_in_commit(rev):
         if code in ("A", "C", "M", "T"):
             path = toks[i + 1]
             i += 2
-            if _is_code(path):
+            if _is_code(path, hn):
                 files[path] = _blob_sha(rev, path)
         elif code == "R":
             old, new = toks[i + 1], toks[i + 2]
             i += 3
-            if _is_code(new):
+            if _is_code(new, hn):
                 files[new] = _blob_sha(rev, new)
-            if _is_code(old) and not _is_code(new):
+            if _is_code(old, hn) and not _is_code(new, hn):
                 removals["D:" + old] = _blob_sha(base, old)
         elif code == "D":
             old = toks[i + 1]
             i += 2
-            if _is_code(old):
+            if _is_code(old, hn):
                 removals["D:" + old] = _blob_sha(base, old)
         else:
             i += 2
     return files, removals
+
+
+def _hard_label(label):
+    """Anchored literal patterns (private-key blocks, known key prefixes, sshpass / URL
+    credentials) are HARD - near-zero false positives; the generic secret-named-assignment
+    heuristic is SOFT (EV-025 and EV-046 were both its false positives). Owner ruling
+    2026-09-07: commit time warns on both; the push guard refuses on hard, warns on soft."""
+    return not label.startswith("secret-assignment(")
+
+
+_C_ESCAPE = re.compile(r'\\(?:([\\"abtnvfr])|([0-7]{3}))')
+_C_SIMPLE = {"\\": "\\", '"': '"', "a": "\a", "b": "\b", "t": "\t", "n": "\n", "v": "\v",
+             "f": "\f", "r": "\r"}
+
+
+def _unquote_c(s):
+    """Undo git's C-style path quoting ("..." with \\", \\\\ and octal escapes) - used when a
+    header path is quoted even under core.quotepath=false (a '\"' or control char in the name)."""
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        body = s[1:-1]
+        return _C_ESCAPE.sub(lambda m: _C_SIMPLE[m.group(1)] if m.group(1)
+                             else chr(int(m.group(2), 8)), body)
+    return s
+
+
+def _diff_added_lines(base, rev):
+    """[(path, new_line_no, text)] - the lines commit `rev` ADDS relative to `base` (its first
+    parent, or the empty tree for a root commit), parsed from one `git diff --unified=0`.
+    Pins (each one a known blindness): --text (a -diff attribute), --no-color, --no-ext-diff,
+    --no-textconv, --no-relative, quotepath off, and --src-prefix/--dst-prefix so a pusher's
+    `diff.noprefix=true` / `diff.mnemonicPrefix` cannot strip the `b/` this parser keys on
+    (gate catch gate_20260907-171348: no prefix -> no path -> nothing scanned, silently).
+    A '+++ ' line is a header ONLY outside a hunk - inside one it is content ('++ x' arrives
+    as '+++ x' and is kept, as the staged scanner does); a C-quoted header path is unquoted.
+    A deleted file has no '+++ b/' header and contributes nothing; lines carrying a NUL (a
+    binary blob forced to text) are dropped rather than scanned as garbage."""
+    out = _run_git(["-c", "core.quotepath=false", "diff", "--unified=0", "--text", "--no-color",
+                    "--no-ext-diff", "--no-textconv", "--no-relative",
+                    "--src-prefix=a/", "--dst-prefix=b/", base, rev])
+    added, path, in_hunk, cur = [], None, False, None
+    for ln in out.split("\n"):
+        if not in_hunk:
+            if ln.startswith("diff --git "):
+                path = None
+                continue
+            if ln.startswith("+++ "):
+                hdr = _unquote_c(ln[4:])
+                path = hdr[2:] if hdr.startswith("b/") else None
+                continue
+        m = _HUNK_HEADER.match(ln)
+        if m:
+            in_hunk, cur = True, int(m.group(1))
+            continue
+        if in_hunk and ln.startswith("diff --git "):
+            in_hunk, path = False, None
+            continue
+        if in_hunk and path is not None and cur is not None and ln.startswith("+"):
+            if "\x00" not in ln:
+                added.append((path, cur, ln[1:]))
+            cur += 1
+    return added
+
+
+def _note_type(rev):
+    """'CLEAR' / 'OVERRIDE' from the commit's adversary note, else None."""
+    p = subprocess.run([GIT, "notes", "--ref", NOTES_REF, "show", rev], capture_output=True,
+                       text=True, encoding="utf-8", errors="replace",
+                       env=dict(os.environ, GIT_NO_REPLACE_OBJECTS="1"))
+    if p.returncode != 0:
+        return None
+    try:
+        return json.loads(p.stdout).get("type")
+    except ValueError:
+        return None
+
+
+def _shallow_boundaries():
+    """The shas listed in the repo's `shallow` file (a shallow clone's grafted boundary
+    commits) - their parents are absent by construction, so a first-parent diff would be
+    the WHOLE tree; they came from the remote, they are not new history."""
+    try:
+        path = _run_git(["rev-parse", "--git-path", "shallow"]).strip()
+        with open(path, encoding="utf-8") as fh:
+            return {ln.strip() for ln in fh if ln.strip()}
+    except (SystemExit, OSError):
+        return set()
+
+
+def _push_secret_audit(revs, doc_revs=None):
+    """(hard, soft, doc_text) over the outgoing commits: every ADDED line of every commit is
+    scanned with the same floor as commit time; hits split into HARD (anchored literals) and
+    SOFT (the assignment heuristic) as (rev12, path, line, label); the added lines of
+    non-code paths are concatenated for the docs model - from `doc_revs` only when given (the
+    commits not already on the remote's tracking refs: the floor still covers every commit in
+    `revs`, the docs MODEL is not re-fed history the remote already holds). A commit that
+    cannot be diffed is reported as a hard 'unscannable-commit' hit - the guard fails closed,
+    never silently. A commit carrying the owner's OVERRIDE note has already been ruled on: its
+    hard hits are demoted to warnings. A shallow-clone boundary commit is skipped with a loud
+    line."""
+    hard, soft, doc_lines = [], [], []
+    doc_set = None if doc_revs is None else set(doc_revs)
+    boundaries = _shallow_boundaries()
+    for rev in revs:
+        if rev in boundaries:
+            sys.stderr.write("adversary push guard: %s is a shallow-clone boundary commit - its "
+                             "parent is absent here, so it is NOT scanned (it came from the "
+                             "remote you cloned).\n" % rev[:12])
+            continue
+        base = rev + "^1" if _git_ok(["rev-parse", "--verify", "--quiet", rev + "^1"]) else EMPTY_TREE
+        hn = _hook_names_apply(rev)
+        try:
+            added = _diff_added_lines(base, rev)
+        except SystemExit:
+            hard.append((rev[:12], "(whole commit)", 0, "unscannable-commit"))
+            continue
+        overridden = _note_type(rev) == "OVERRIDE"
+        for path, ln, text in added:
+            for _, label in _scan_one_text(text, 1):
+                if _hard_label(label) and overridden:
+                    soft.append((rev[:12], path, ln, label + " (owner OVERRIDE note - allowed)"))
+                else:
+                    (hard if _hard_label(label) else soft).append((rev[:12], path, ln, label))
+                break
+            if not _is_code(path, hn) and (doc_set is None or rev in doc_set):
+                doc_lines.append(text)
+    return hard, soft, "\n".join(doc_lines)
+
+
+def _push_secret_barrier(lref, revs, anchors, remote_known, doc_revs=None):
+    """EV-046 (owner ruling 2026-09-07, 'instead of blocking on commit, force a git scan
+    before each push'): the barrier commit time no longer provides. A HARD literal in any
+    outgoing commit REFUSES the push - a hook cannot scrub history, so the recipe rewrites
+    the unpushed commits; the soft heuristic WARNS; the outgoing DOC lines go through the
+    local docs model - a block refuses, an absent model degrades loudly. Returns 1 to refuse."""
+    hard, soft, doc_text = _push_secret_audit(revs, doc_revs)
+    rows = lambda hs: "".join("  %s  %s:%s  %s\n" % h for h in hs)
+    if soft:
+        sys.stderr.write("\nADVERSARY PUSH GUARD: WARNING - secret-shaped values in outgoing "
+                         "commits of %s (heuristic matches and owner-overridden commits warn, "
+                         "never refuse; values not printed):\n%s\n" % (lref, rows(soft)))
+    anchor = anchors[0][:12] if anchors else "<the remote's tip>"
+    recipe = ("A hook cannot scrub history: rewrite the unpushed commits -\n  git rebase -i %s\n"
+              "mark each listed commit 'edit', remove the value, re-run the gate, `git rebase "
+              "--continue` (post-commit re-notarizes each rewritten commit), then push again. A "
+              "DELIBERATE fixture (a tutorial key, a test value) is built at runtime from parts "
+              "so no literal exists in the bytes - the gate's own selftests do this. Or the "
+              "owner rules: a commit the owner OVERRIDE-notarizes passes with a warning.\n"
+              % anchor)
+    if not remote_known:
+        recipe += ("The remote's tip is unknown here (a new remote, or not fetched), so some of "
+                   "these commits may already be published elsewhere - if so, do NOT rewrite "
+                   "them: rotate the value and the owner rules.\n")
+    recipe += "\n"
+    if hard:
+        sys.stderr.write("\nADVERSARY PUSH GUARD: push of %s REFUSED - outgoing commit(s) carry a "
+                         "secret LITERAL (values not printed):\n%s\n%s" % (lref, rows(hard), recipe))
+        return 1
+    if doc_text.strip():
+        try:
+            res = (docscan.scan(doc_text) if docscan
+                   else {"status": "degraded", "detail": "docscan module unavailable"})
+        except (Exception, SystemExit) as e:
+            res = {"status": "degraded", "detail": "docs scan crashed: %s" % (str(e)[:150])}
+        if res["status"] == "block":
+            sys.stderr.write("\nADVERSARY PUSH GUARD: push of %s REFUSED - the local docs reviewer "
+                             "flagged secret material in outgoing documentation (%s). Values are "
+                             "not printed; find it in the outgoing doc lines. %s"
+                             % (lref, res.get("detail", ""), recipe))
+            return 1
+        if res["status"] == "degraded":
+            sys.stderr.write("adversary push guard: docs SEMANTIC scan SKIPPED (%s) - outgoing "
+                             "docs got the pattern floor only.\n" % res.get("detail", ""))
+        elif res.get("capped"):
+            sys.stderr.write("adversary push guard: docs scan CAPPED (%s) - the tail of the "
+                             "outgoing docs was NOT semantically scanned.\n" % res.get("detail", ""))
+    return 0
 
 
 def cmd_record(ref):
@@ -823,6 +1456,8 @@ def cmd_record(ref):
     A post-commit step cannot undo a commit - but it can refuse to bless one: on any
     mismatch it writes NOTHING and exits 1, and the ABSENCE of a note is exactly the
     signal the audit tripwire (adversary_audit.py) keys on."""
+    if _fixture_repo():
+        return 0                              # EV-045: fixture repos are never notarized
     root = _repo_root()
     head = _run_git(["rev-parse", "HEAD"]).strip()
     files, removals = _changed_code_in_commit(head)
@@ -884,6 +1519,17 @@ def cmd_record(ref):
     return 0
 
 
+def _has_remote_tracking_refs(remote):
+    """True when refs/remotes/<remote>/ holds anything - what the local clone last saw
+    published on that remote; False for a URL-only or unknown remote. The exclusion itself is
+    the ref GLOB `--remotes=<remote>/*` (one argv token however many refs exist - a sha list
+    crossed the Windows command-line ceiling at ~790 refs, gate round 2 gate_20260909-153226);
+    git resolves the glob itself, skipping a dangling symref (origin/HEAD after a server-side
+    rename, gate round 1 gate_20260909-151127) and peeling a fetched tag."""
+    out = _run_git(["for-each-ref", "--count=1", "--format=%(objectname)", "refs/remotes/%s/" % remote])
+    return bool(out.strip())
+
+
 def cmd_check_push(remote):
     """The pre-push PUSH GUARD (owner order 2026-08-31: notes are MANDATORY - a push
     is refused without them). Reads the pre-push stdin protocol (one line per ref:
@@ -902,7 +1548,9 @@ def cmd_check_push(remote):
     bp = os.path.join(root, ".githooks", "adversary_baseline")
     if os.path.isfile(bp):
         b = open(bp, encoding="utf-8").read().strip().split()
-        if b and _git_ok(["rev-parse", "--verify", "--quiet", b[0] + "^{commit}"]):
+        # ROOT (armed at birth) is a SENTINEL, never resolved as a revision: a ref literally
+        # named ROOT must not exclude anything (gate round 2, gate_20260908-224532)
+        if b and b[0] != "ROOT" and _git_ok(["rev-parse", "--verify", "--quiet", b[0] + "^{commit}"]):
             baseline = b[0]
     audited_a_ref = False
     for line in sys.stdin.read().splitlines():
@@ -918,13 +1566,52 @@ def cmd_check_push(remote):
         # occurrence would flip the baseline back to INCLUDED and drag the entire
         # pre-baseline history into the audit (caught live on the first real push)
         excl = []
-        if rsha != zero and _git_ok(["cat-file", "-e", rsha]):
+        remote_known = rsha != zero and _git_ok(["cat-file", "-e", rsha])
+        if remote_known:
             excl.append(rsha)
         if baseline:
             excl.append(baseline)
+        # `revs` is the FULL outgoing set (remote tip when known, else the baseline only): the
+        # hard-literal floor and the note audit always cover all of it - tracking refs are a
+        # local snapshot the remote may have moved away from (gate round 3, gate_20260909-155108)
         args = ["rev-list", lsha] + (["--not"] + excl if excl else [])
+        revs = _run_git(args).split()
+        doc_revs = revs
+        anchors = [rsha] if remote_known else []    # what the hard-literal recipe rebases onto
+        if not remote_known and revs and _has_remote_tracking_refs(remote):
+            # a NEW ref on the remote: the docs MODEL is not re-fed commits reachable from that
+            # remote's own tracking refs (their doc lines were scanned when first pushed;
+            # push-guard catch 2026-09-09: excluding only the baseline re-fed 124 published
+            # commits, whose shifted chunk boundaries then refused a four-commit docs branch).
+            # ONE glob token, never a sha list (gate round 2). Loud, like every other skip.
+            doc_revs = _run_git(["rev-list", lsha, "--not", "--remotes=%s/*" % remote]
+                                + ([baseline] if baseline else [])).split()
+            n_pub = len(revs) - len(doc_revs)
+            if n_pub:
+                sys.stderr.write("adversary push guard: %d of %d outgoing commit(s) are already on "
+                                 "%s's tracking refs - they get the pattern floor and the note audit "
+                                 "but are NOT re-fed to the docs model (`git fetch --prune %s` first "
+                                 "if those refs may be stale).\n" % (n_pub, len(revs), remote, remote))
+        if not remote_known:
+            # the recipe anchors at the FORK POINT: the parent of the OLDEST unpublished commit
+            # (rev-list is newest-first), never at whichever tracking tip happened to list
+            # first (gate round 1, gate_20260909-151127); a root commit has no parent
+            if doc_revs and _git_ok(["rev-parse", "--verify", "--quiet", doc_revs[-1] + "^"]):
+                anchors.append(_run_git(["rev-parse", doc_revs[-1] + "^"]).strip())
+            if baseline:
+                anchors.append(baseline)
+        # the secret barrier runs BEFORE the note audit so a secret is reported even on
+        # notarized history (EV-046); `remote_known` stays honest - with the tip unknown the
+        # recipe keeps warning that listed commits may already be published elsewhere
+        if _push_secret_barrier(lref, revs, anchors, remote_known, doc_revs):
+            return 1
+        boundaries = _shallow_boundaries()
         bad = []
-        for rev in _run_git(args).split():
+        for rev in revs:
+            if rev in boundaries:
+                continue                        # a shallow boundary came FROM the remote; the
+                                                # notes ref is not part of a depth-limited clone
+
             files, removals = _changed_code_in_commit(rev)
             if (files or removals) and not _git_ok(["notes", "--ref", NOTES_REF, "show", rev]):
                 subj = _run_git(["log", "-1", "--format=%s", rev]).strip()
@@ -952,8 +1639,12 @@ def cmd_check_push(remote):
                 "clone pushed notes), recover with:\n"
                 "  git fetch %s +refs/notes/adversary:refs/notes/adversary-theirs\n"
                 "  git notes --ref refs/notes/adversary merge -s cat_sort_uniq "
-                "refs/notes/adversary-theirs\nthen push again.\n\n"
-                % (p.stderr.decode("utf-8", "replace")[:300], remote))
+                "refs/notes/adversary-theirs\nthen push again.\n"
+                "If you just REWROTE history (filter-repo) and rebuilt the notes, do NOT merge - "
+                "the remote notes name commits that no longer exist. Force-push the notes ref "
+                "FIRST, then the branch:\n"
+                "  git push --force %s refs/notes/adversary\n\n"
+                % (p.stderr.decode("utf-8", "replace")[:300], remote, remote))
             return 1
     return 0
 
@@ -974,6 +1665,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Mandatory pre-commit adversarial review gate.")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("check")
+    sub.add_parser("verify", help="check existing clearance without requesting review")
     r = sub.add_parser("run")
     r.add_argument("--model", default=DEFAULT_MODEL)
     r.add_argument("--context", default="")
@@ -984,6 +1676,8 @@ def main(argv=None):
     sub.add_parser("status")
     a = ap.parse_args(argv)
     if a.cmd == "check":
+        return cmd_check(auto_review=True)
+    if a.cmd == "verify":
         return cmd_check()
     if a.cmd == "run":
         return cmd_run(a.model, a.context)
