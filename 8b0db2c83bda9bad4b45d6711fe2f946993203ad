@@ -1,0 +1,16 @@
+{
+ "type": "CLEAR",
+ "commit": "8b0db2c83bda9bad4b45d6711fe2f946993203ad",
+ "when": "20260914-115120",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "47eb03f429b97aaca6032e36989c2a572d55233b76c6e3a446d5898be862e75a",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260914-115115",
+   "artifact": ".adversary\\reviews\\gate_20260914-115115.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260914-115115.md": "model: z-ai/glm-5.3-flash | usage: {'prompt_tokens': 1194, 'completion_tokens': 2977, 'total_tokens': 4171, 'cost': 0.0012507, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0012507, 'upstream_inference_prompt_cost': 0.000134325, 'upstream_inference_completions_cost': 0.001116375}, 'completion_tokens_details': {'reasoning_tokens': 2528, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json']\n\nVerification performed against the staged bytes:\n\n1. **Diff \u2194 full-file consistency**: The only changed lines across both hunks are `\"version\": \"0.2.0\"` (adversary-gate) and `\"version\": \"0.2.2\"` (colibri-review). Every other line in the full staged file matches the diff context exactly \u2014 no hidden edits (no `$schema` change, no `source` redirect, no description/keyword tampering).\n2. **Supply-chain check**: Since version bumps in a marketplace manifest are a classic spot for smuggling a `source` change, I confirmed both `source` values remain `./plugins/adversary-gate` and `./plugins/colibri-review` \u2014 local, relative, unchanged. No external/registry pivot introduced.\n3. **JSON validity**: Structure is well-formed \u2014 balanced braces/brackets, no trailing commas, no duplicate keys, valid UTF-8 (the pre-existing em-dash in the colibri-review description is untouched). Both plugin entries carry all required fields (`name`, `source`).\n4. **Semver sanity**: 0.1.0 \u2192 0.2.0 and 0.2.1 \u2192 0.2.2 are valid, monotonically increasing bumps in correct fields.\n5. **Repo doctrine**: No `.colibri_reviews/_manifest.json` rows are touched by this change, so none of the manifest-shape findings (duplicate row, files wrapper, relative-keyed row) apply.\n6. **Behavioral surface**: Version strings in a marketplace manifest are metadata; no code path, hook, or gate logic reads or branches on these values within the provided bytes. Nothing is broken or enabled by them.\n\nNon-finding caveat (unverifiable, not raised as a defect): the plugin directories' own manifests (`plugins/*/plugin.json`) are not in the staged bytes, so I cannot confirm their internal versions match these bumps; whether a mismatch would even matter depends on consumer precedence rules I can't inspect here. Nothing in the provided evidence indicates a mismatch, so I won't speculate further.\n\nNo defect is introduced or enabled by this change.\n\nVERDICT: CLEAR"
+ }
+}
