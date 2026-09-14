@@ -1,0 +1,100 @@
+{
+ "type": "CLEAR",
+ "commit": "fa4771215a88c993fc3e83a8f3bff1ee453c2fa3",
+ "when": "20260914-173351",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "4bbe008102732ea70229f82c1ebe48db303f00b4427dbab9c50e112c8a6accdf",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/.claude-plugin/plugin.json": {
+   "sha": "6286356f3885ad38679695cb2f1344243dc9b8d70e49526a72269559103b4a3c",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/adversary_audit.py": {
+   "sha": "f9bf47136092e8d4710720edfbe33c7595ad4f1e7c1144dc9f8ae121b0fad4a0",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/adversary_gate.py": {
+   "sha": "0e0cac8a2c65adb0eebcbb97cd27cb12d2a979a6bb267bbfa7306f6afc1cbd49",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/audit_selftest.py": {
+   "sha": "cd6a4f8d8cc0beaaea5dcb4d8db80e6e332331faccbfaa669c140403c2633ee0",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/docscan.py": {
+   "sha": "c380b067a4592f6ea89768bd964810c0436940997766d8cd3d48ede843c5efe8",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/docscan_selftest.py": {
+   "sha": "5546cb613dd6cce94b8fb95fd2012978bfc46301c258a45eed163c30c096a6de",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/gate_selftest.py": {
+   "sha": "f763e12d6d3dcd3007edae53f36e6c166b0ddc24a0c11191f1883c6262b3efe6",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/guard_selftest.py": {
+   "sha": "fb18afd0aa4696abec5ba2cc51c05a327047e84643a01d1d4af2f0d1d22571dd",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/harness_guard.py": {
+   "sha": "5fa5d743a359ecf092990cde4c3ae5d7654ea945c4705ba275cd9ee17584524a",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/hooks/post-commit": {
+   "sha": "9065b0fea7a4ec8fd565ecd910381a4fcce762e20aa26049152ce73fbd9650dd",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/hooks/pre-commit": {
+   "sha": "082f293e97485ae7cd8aefb14eb5e7be75e5099e1eb31c9ccf991551d447ceba",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/hooks/pre-push": {
+   "sha": "3c7b65d0828a4bde0abe5094225239214434acd6ab029ef2e9e56772cdce712d",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/install_gate.py": {
+   "sha": "a7a120fec1692eb771bd02b9cd5c88b1318b5dfe63f071a056e6a75edfcf539a",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  },
+  "plugins/adversary-gate/tools/install_selftest.py": {
+   "sha": "cd78c78ba677f57942db070e5806ef87bab172cbbc72007e1cd6ee730d70fb8f",
+   "model": "xai:grok-4.6",
+   "when": "20260914-173319",
+   "artifact": ".adversary\\reviews\\gate_20260914-173319.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260914-173319.md": "model: xai:grok-4.6 | usage: {'input_tokens': 209128, 'input_tokens_details': {'cached_tokens': 512}, 'output_tokens': 40536, 'output_tokens_details': {'reasoning_tokens': 40528}, 'total_tokens': 249664, 'num_sources_used': 0, 'num_server_side_tools_used': 0, 'cost_in_usd_ticks': 13214080000, 'context_details': {'input_tokens': 209128, 'output_tokens': 40536}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/.claude-plugin/plugin.json', 'plugins/adversary-gate/tools/adversary_audit.py', 'plugins/adversary-gate/tools/adversary_gate.py', 'plugins/adversary-gate/tools/audit_selftest.py', 'plugins/adversary-gate/tools/docscan.py', 'plugins/adversary-gate/tools/docscan_selftest.py', 'plugins/adversary-gate/tools/gate_selftest.py', 'plugins/adversary-gate/tools/guard_selftest.py', 'plugins/adversary-gate/tools/harness_guard.py', 'plugins/adversary-gate/tools/hooks/post-commit', 'plugins/adversary-gate/tools/hooks/pre-commit', 'plugins/adversary-gate/tools/hooks/pre-push', 'plugins/adversary-gate/tools/install_gate.py', 'plugins/adversary-gate/tools/install_selftest.py']\n\nVERDICT: CLEAR"
+ }
+}
