@@ -1,0 +1,40 @@
+{
+ "type": "CLEAR",
+ "commit": "46bc45bb5f2192d107110cb9d5fa1407f5ecff95",
+ "when": "20260915-150856",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "1ba4bf6e55dcde031e883734529d6198c9ac7a4ceb5b3defe4640d8c65388a75",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-150853",
+   "artifact": ".adversary\\reviews\\gate_20260915-150853.md"
+  },
+  "plugins/adversary-gate/.claude-plugin/plugin.json": {
+   "sha": "69c5bc7296c92df60f64b6bb7c6f4b56f1a8a59a21b1180454ab9240e0403fb3",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-150853",
+   "artifact": ".adversary\\reviews\\gate_20260915-150853.md"
+  },
+  "plugins/adversary-gate/tools/adversary_gate.py": {
+   "sha": "fc37e21b0711d750cd7fb46faaedf0598102a7ad5bfc46ac9014788a6c9ad0b5",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-150853",
+   "artifact": ".adversary\\reviews\\gate_20260915-150853.md"
+  },
+  "plugins/adversary-gate/tools/docscan.py": {
+   "sha": "2ec4075b15d8fef1127c6eb8693d78b31f87117aadee0ba957b45af608584d91",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-150853",
+   "artifact": ".adversary\\reviews\\gate_20260915-150853.md"
+  },
+  "plugins/adversary-gate/tools/docscan_selftest.py": {
+   "sha": "cd606e0c93e06882278c96d00086b4ec107a90353e332acd66c095a27f16f68a",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-150853",
+   "artifact": ".adversary\\reviews\\gate_20260915-150853.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260915-150853.md": "model: z-ai/glm-5.3-flash | usage: {'prompt_tokens': 38364, 'completion_tokens': 18339, 'total_tokens': 56703, 'cost': 0.0099487887, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0099487887, 'upstream_inference_prompt_cost': 0.0038364, 'upstream_inference_completions_cost': 0.0061123887}, 'completion_tokens_details': {'reasoning_tokens': 15735, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/.claude-plugin/plugin.json', 'plugins/adversary-gate/tools/adversary_gate.py', 'plugins/adversary-gate/tools/docscan.py', 'plugins/adversary-gate/tools/docscan_selftest.py']\n\nI verified each surface of this change against the staged bytes rather than trusting the comments.\n\n**1. `http.client` transport catch (adversary_gate.py).** `http.client.HTTPException` does not subclass `OSError` (it subclasses `Exception`), so the widening is real, and `IncompleteRead` is genuinely outside the old handler. Exception ordering is safe: `urllib.error.HTTPError` (\u2282 `URLError` \u2282 `OSError`) is caught by the earlier clause, so the 429 retry loop is untouched, as the comment claims. Both new paths raise `SystemExit`, which `_call_model` consumes to advance the fallback chain and which fails closed on the last model \u2014 strictly fail-closed, no new fail-open. `RemoteDisconnected` (both `OSError` and `HTTPException`) lands in the same handler either way. No caller contract changes.\n\n**2. docscan vocabulary widening.** I re-ran every pre-existing and new `values` fixture through `_evidence_is_name` by hand against the new words (`needs/requires/expects/has/have/must/should/be/model/default/reviewer/slug/fallback`...): every value still holds because withdrawal still requires a name-shaped token (placeholder / underscored ALL-CAPS / provider / valid slug), and pure-filler reasons still return `named=False` (block stands). The new words only flip tokens from \"unknown \u2192 refuse\" to \"descriptive \u2192 continue\"; a value token like `makerbase`, `hunter2`, `nvidia`, `qwen`, `rotated` still returns False. This is an incremental widening of a pre-existing residual class (dictionary words in vocabulary), not a new fail-open class.\n\n**3. Slug rule.** Traced all bounds: left side must be in `_MODEL_VENDORS` (not `_PROVIDERS` \u2014 `postgres/sunshine-dragon-42` correctly held); right side lowercase-only (so `openrouter/Qx9kLm2pR4sT` fails the fullmatch and holds); `[0-9]{3,}` and `[0-9a-f]{8,}` rejections catch `openai/sk-9f2ac1b8e4d7`, `z-ai/9f2ac1b8e4d7c3a0`, and any hex-tailed key; the model-shape requirement (dotted version / `<n>b` / family word) is what holds `openai/makerbase`, `openai/hunter2`, `x-ai/admin`, `hunter/two`, `abc/def123==` (the `=` also breaks the right-side class). The `anthropic/sk-ant-api03-...` shape survives because no segment carries a model shape. Residuals (e.g. `openai/flash-42`) are explicitly documented in the code as accepted. Incomplete coverage (`qwen/qwen3-max` still held) errs in the refusal direction \u2014 friction, not a hole.\n\n**4. Selftest.** New fixtures are syntactically valid (implicit continuation concat is fine), `model_slug` is defined before use, fixtures are runtime-assembled per repo doctrine, and I hand-verified every new `names` entry withdraws (`needs \\`OPENROUTER_API_KEY\\`` tokenizes past the backtick into a valid underscored ALL-CAPS name; all slug entries pass the rule) and every new `values` entry holds. Both version bumps (marketplace.json, plugin.json) agree at 0.3.2.\n\nNo broken callers, no signature changes, no unhandled paths introduced; the transport fix and the evidence-gate widening both move in the fail-closed or documented-residual direction.\n\nVERDICT: CLEAR"
+ }
+}
