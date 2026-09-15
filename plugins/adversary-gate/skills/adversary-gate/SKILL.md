@@ -36,12 +36,13 @@ python ${CLAUDE_PLUGIN_ROOT}/tools/install_gate.py <repo>
 cd <repo>
 git add .githooks .gitignore
 git update-index --chmod=+x .githooks/pre-commit .githooks/post-commit .githooks/pre-push
-git commit -m "chore(gate): arm the adversarial commit gate"   # MUST be refused - that is the proof
-python ${CLAUDE_PLUGIN_ROOT}/tools/adversary_gate.py run   # default model chain; --model overrides
-git commit -m "chore(gate): arm the adversarial commit gate"   # now passes; post-commit notarizes it
+python ${CLAUDE_PLUGIN_ROOT}/tools/adversary_gate.py run --context "arming commit"   # optional: context for the reviewer
+git commit -m "chore(gate): arm the adversarial commit gate"   # the gate speaks: auto-review (or sha re-check) -> CLEAR lands + notarizes; BLOCK refuses
 ```
 
-If the first commit SUCCEEDS, something is broken — audit with
+The proof is the gate line during the commit — `ADVERSARY GATE: requesting automatic
+independent review of staged changes.` (or the sha re-check after an explicit `run`). If a
+code commit lands SILENTLY, something is broken — audit with
 `install_gate.py <repo> --verify-only` and fix before proceeding. The
 `--chmod=+x` step is REQUIRED: POSIX git silently skips hooks with index mode
 100644, which disarms everything on Linux/macOS checkouts.
@@ -51,12 +52,16 @@ If the first commit SUCCEEDS, something is broken — audit with
 1. Finish ALL edits (clearance follows bytes; any re-edit invalidates it).
 2. Stage everything that belongs in the commit — including `.json` manifest rows,
    which get reviewed WITH the change they describe.
-3. `python ${CLAUDE_PLUGIN_ROOT}/tools/adversary_gate.py run`
-   (add `--context "..."` for design intent, provenance of copied bytes, or a
-   factual rebuttal of a previous BLOCK — the reviewer re-verifies rebuttals
-   against the bytes and calls out false ones).
-4. On CLEAR: commit immediately. On BLOCK: fix each finding or rebut it with
-   file:line evidence; treat a finding you cannot refute as real.
+3. `git commit` — the hook requests the independent review itself and, on CLEAR, lands
+   and notarizes the commit in one motion. When the reviewer needs to know something —
+   design intent, provenance of copied bytes, or a factual rebuttal of a previous BLOCK —
+   run `python ${CLAUDE_PLUGIN_ROOT}/tools/adversary_gate.py run --context "..."` FIRST,
+   then commit (the automatic review carries no context; the reviewer re-verifies
+   rebuttals against the bytes and calls out false ones). Before any model call the gate
+   refuses a staged `.py` that removes a module-level symbol a tracked unstaged `.py`
+   still references — stage the callers too.
+4. On BLOCK the commit is refused: fix each finding and commit again, or rebut it with
+   file:line evidence via `run --context`; treat a finding you cannot refute as real.
 5. Push normally. The pre-push guard audits the outgoing range and pushes
    `refs/notes/adversary` automatically — evidence always travels with history.
 6. Merges happen LOCALLY (staged merge result → run → clear → commit → notarized).
@@ -80,7 +85,7 @@ checks out GitHub's synthetic merge commit, which can never carry a note).
 
 - Reviewer hangs or returns empty → the gate fails CLOSED with BLOCK (designed);
   re-run with `--model <another OpenRouter model>`.
-- Commit passes when it should be refused → unarmed clone or 100644 hook mode;
+- A code commit lands with no gate line at all → unarmed clone or 100644 hook mode;
   `install_gate.py <repo> --verify-only`, re-run the installer, redo the chmod step.
 - Push refused listing ancient commits → the baseline should exclude pre-gate
   history; re-run the installer (never hand-edit the baseline).

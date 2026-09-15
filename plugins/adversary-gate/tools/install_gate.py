@@ -31,8 +31,12 @@ Exit codes (automation keys on these):
 
 The installer NEVER commits. The arming commit stages `.githooks/pre-commit`, which
 the gate itself always gates - so the driver's closing sequence is the proof the hook
-fires in this clone: stage the shim, attempt the commit (EXPECT refusal), run
-`adversary_gate.py run` to CLEAR, commit. Docs: colibri-code-review/docs/GATE_INSTALLER.md.
+fires in this clone: stage the shims, optionally `adversary_gate.py run --context ...`
+(the automatic review carries no context), then commit and EXPECT the gate to speak -
+since 9597241 (2026-09-07) `check` requests the review itself ("ADVERSARY GATE:
+requesting automatic independent review of staged changes.") or re-checks an existing
+clearance; CLEAR lands + notarizes, BLOCK refuses; a code commit that lands silently
+means the hook did not run. Docs: colibri-code-review/docs/GATE_INSTALLER.md.
 """
 import argparse
 import os
@@ -721,11 +725,15 @@ def main(argv=None):
           ".githooks/pre-push")
     print("       <- records index mode 100755; os.chmod cannot set an exec bit on")
     print("          Windows, and POSIX git SILENTLY SKIPS a non-executable hook")
-    print("  3. git commit           <- EXPECT 'ADVERSARY GATE: commit REFUSED'")
-    print("  4. python %s run        (needs OPENROUTER_API_KEY)" % (gate_path or "<gate>"))
-    print("  5. git commit           <- passes; post-commit then notarizes it (verify:")
-    print("       git notes --ref %s show HEAD)" % NOTES_REF)
-    print("  6. when pushing, ALSO push the notes: git push origin %s" % NOTES_REF)
+    print("  3. python %s run --context \"arming commit\"" % (gate_path or "<gate>"))
+    print("       <- optional (needs OPENROUTER_API_KEY): the commit below requests the review")
+    print("          by itself, but WITHOUT context; EXPECT 'VERDICT: CLEAR'")
+    print("  4. git commit           <- EXPECT the gate to speak: 'ADVERSARY GATE: requesting")
+    print("       automatic independent review of staged changes.' (or a re-check of the shas)")
+    print("       then CLEAR -> the commit lands and post-commit notarizes it (verify:")
+    print("       git notes --ref %s show HEAD); BLOCK -> refused with findings." % NOTES_REF)
+    print("       A code commit that lands SILENTLY means the hook did not run: --verify-only")
+    print("  5. git push             <- the pre-push guard audits and pushes %s itself" % NOTES_REF)
     return 0 if gate_ok else 3
 
 

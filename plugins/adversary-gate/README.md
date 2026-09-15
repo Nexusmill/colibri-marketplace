@@ -63,11 +63,14 @@ cd <repo>
 git add .githooks .gitignore
 git update-index --chmod=+x .githooks/pre-commit .githooks/post-commit .githooks/pre-push
 
-# 3. attempt the commit - it MUST be refused (that refusal is your end-to-end proof)
-git commit -m "chore(gate): arm the adversarial commit gate"
+# 3. (optional) give the reviewer context and obtain the clearance up front - the commit
+#    below requests the review by itself, but with NO context
+python <plugin-root>/tools/adversary_gate.py run --context "arming commit"
 
-# 4. obtain the clearance, then commit for real
-python <plugin-root>/tools/adversary_gate.py run   # default model chain; --model overrides
+# 4. commit - EXPECT the gate to speak: "ADVERSARY GATE: requesting automatic independent
+#    review of staged changes." (or a re-check of the shas after step 3), then CLEAR -> it
+#    lands and is notarized, or BLOCK -> refused with findings. A code commit that lands
+#    SILENTLY means the hook did not run: python <plugin-root>/tools/install_gate.py <repo> --verify-only
 git commit -m "chore(gate): arm the adversarial commit gate"
 
 # 5. verify the durable evidence
@@ -75,9 +78,11 @@ git notes --ref refs/notes/adversary show HEAD
 python <repo>/.githooks/adversary_audit.py --repo <repo>
 ```
 
-Daily loop: finish ALL edits → stage → `adversary_gate.py run` → fix or factually
-rebut BLOCK findings (`--context`; the reviewer re-verifies rebuttals against the
-bytes) → on CLEAR, commit immediately. Pushes audit themselves and carry the notes
+Daily loop: finish ALL edits → stage → `git commit` (the hook requests the review
+itself; on CLEAR the commit lands and is notarized) → on BLOCK fix, or factually rebut
+with `adversary_gate.py run --context "..."` and commit again (the reviewer re-verifies
+rebuttals against the bytes; the automatic review carries no context, so `run --context`
+FIRST whenever the reviewer needs intent or provenance). Pushes audit themselves and carry the notes
 ref automatically. Full runbook including CI, branch protection, merges (do them
 locally — a GitHub server-side merge commit can never carry a note) and a
 troubleshooting chapter where every entry actually happened:
@@ -111,7 +116,7 @@ carries a secret literal or a docs-model block.
 ## Provenance
 
 This plugin is a versioned snapshot of the canonical suite in the Nexusmill Tools
-repo at commit `6773f97` (2026-09-10). The canonical source of truth remains that
+repo at commit `a6dcefa` (2026-09-14). The canonical source of truth remains that
 repo; the snapshot is updated deliberately, with the same adversarial review this
 tool enforces — every commit of this marketplace passes its own gate.
 
