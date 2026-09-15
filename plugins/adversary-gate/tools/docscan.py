@@ -215,10 +215,25 @@ described description inventory list lists set stored store vault holds hold rea
 uses used using workspace space account user username email url endpoint host hostname path
 bucket region location database db schema org organization team service provider client
 pattern patterns one tracked html prefixed formatted looking style
+needs need needed requires require required expects expected expect exports exported defines
+defined references referenced refers contains contained includes included has have must should
+be model models default reviewer slug fallback
 """.split())
+# (2026-09-14, push-guard catch on the colibri main landing: the model wrote "needs `OPENROUTER_API_KEY`" -
+# a prose VERB the vocabulary lacked held the whole reason as a value and refused a 14-commit
+# fast-forward whose lines had already passed in smaller pushes; verbs and the model-id nouns added)
 _PROVIDERS = frozenset("""replicate tavily langsmith langchain postgres postgresql google gcp
 anthropic openai openrouter moltbook nasa earthdata firms airnow context7 aws azure github
 gitlab huggingface hf mysql redis stripe slack discord twilio sendgrid cloudflare vercel""".split())
+# Model VENDORS (the left side of an OpenRouter-style slug) and model-FAMILY words. Used by the
+# slug rule ONLY: bare, these stay unknown words (a password "nvidia" holds) - gate round 1 of
+# the 2026-09-14 fix caught eleven of them widening the provider withdrawal when added to
+# _PROVIDERS, and a provider/PASSWORD slug (openai/makerbase) withdrawing on the left side alone
+_MODEL_VENDORS = frozenset("""z-ai zai x-ai xai openai anthropic google meta-llama meta mistralai
+mistral deepseek qwen nvidia microsoft openrouter cohere perplexity amazon""".split())
+_MODEL_WORDS = frozenset("""glm grok gpt claude llama mistral mixtral qwen gemini gemma deepseek phi
+sonnet opus haiku flash pro lite instruct chat mini nano turbo preview reasoner coder vision
+embed embedding""".split())
 
 # A token the prompt itself calls a placeholder ("export API_KEY=your-key-here -> placeholder") names no
 # value: yourpassword, your-key-here, changeme, <redacted>. Push-guard catch 2026-09-08 (the fleet's carried
@@ -286,6 +301,21 @@ def _evidence_is_name(reason):
                 named = True
                 continue
             return False
+        # a vendor-slash-model SLUG names no value (EV-083, 2026-09-14: the reviewer's own
+        # default model id was quoted 3/3 as "the secret value"). BOUNDED three ways: the left
+        # side is a known MODEL vendor; the right side is lowercase, no 3+ digit run, no 8+ hex
+        # run; and the right side carries a MODEL shape - a dotted version (5.3), a parameter
+        # size (70b) or a family word (glm, grok, chat). So openai/sk-<hex>, z-ai/<hex>,
+        # hunter/two, abc/def123== AND openai/makerbase, postgres/sunshine-dragon-42,
+        # openai/hunter2 (gate round 1) all stay values. Residual, accepted: a password built
+        # from a family word plus short digits (flash-42) behind a vendor name.
+        slug = re.fullmatch(r"([a-z][a-z0-9-]*)/([a-z][a-z0-9.-]*)", bare)
+        if slug and slug.group(1) in _MODEL_VENDORS and not re.search(r"[0-9]{3,}|[0-9a-f]{8,}", slug.group(2)):
+            segs = slug.group(2).split("-")
+            if re.search(r"[0-9]+\.[0-9]+", slug.group(2)) or any(
+                    re.fullmatch(r"[0-9]+b", s) or s in _MODEL_WORDS for s in segs):
+                named = True
+                continue
         # a hyphenated phrase ("api-key", "hard-coded") is judged part by part; any part
         # that is not descriptive vocabulary or a provider name is a VALUE candidate
         for part in bare.split("-"):

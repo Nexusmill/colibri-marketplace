@@ -61,6 +61,7 @@ def main():
     #     DESCRIPTION withdraws it (the model quoted "REPLICATE_API token variable" and a
     #     prose description of a project id as the "value"); an empty/none reason keeps the
     #     block - fail closed. Fixture values are assembled at runtime (no floor literal).
+    model_slug = "z-ai" + "/" + "glm-5.3-flash"             # built from parts: never a literal in bytes
     names = [
         "REPLICATE_API token variable",
         "GOOGLE_CLOUD_PROJECT value (the real project id, quoted in the workflow) and a "
@@ -79,6 +80,16 @@ def main():
         # prefix to the next word and wrapped it in prose the vocabulary did not know
         "AIza\u2026-shaped string (Google API key pattern)", "one AIza\u2026-shaped string in a tracked HTML",
         "an `AKIA...`-style id", "sk-ant-...-prefixed token",
+        # push-guard catch 2026-09-14 (colibri main landing, chunk 3 of a 14-commit feed): the model
+        # wrote a prose VERB the vocabulary lacked in front of an env-var NAME, so the name-only
+        # withdrawal never fired and a legitimate gate doc refused the owner's fast-forward
+        "needs `OPENROUTER_API_KEY`", "requires OPENROUTER_API_KEY and XAI_API_KEY",
+        "needs the XAI_API_KEY env var", "the workflow expects CONTEXT7_API_KEY to be set",
+        # EV-083 (marketplace README push 2026-09-14): a provider-slash-model SLUG is a name - the
+        # reviewer's own default model id was quoted 3/3 as 'the secret value'
+        model_slug, "the OpenRouter model id " + model_slug, "the default reviewer " + model_slug
+        + " and its XAI_API_KEY fallback", "model slug " + "x-ai/" + "grok-4.6",
+        "meta-llama/" + "llama-3.1-70b-instruct", "deepseek/" + "deepseek-chat", "openai/" + "gpt-4o",
     ]                                                       # ELIDED vendor prefix names no value                                                       # vocabulary (fleet probe 2026-09-08)
     aws_example = "AKIA" + "IOSFODNN7" + "EXAMPLE"          # gate round 1: an ALL-CAPS VALUE
     project_id = "crafty-" + "hook-" + "483415" + "-b3"
@@ -96,6 +107,15 @@ def main():
         "pw@host", "pw1234", "Passw0rd", "PW", "user:s3cr3t",    # role word + value stays a value
         "lsv2_sk_9f2ac1b8e4d7...", "sk-ant-api03-Qx9" + "kLm2...", "9f2ac1b8e4d7...",  # a TRUNCATED
         "makerbase...", "hunter2...", "Passw0rd...", "PASSWORD1...", "password: makerbase... (rotated)",
+        # slug rule bounds (2026-09-14): a slash alone names nothing - the LEFT side must be a known
+        # provider and the RIGHT side must look like a model id (lowercase, no 3+ digit run, no
+        # 8+ hex run); a provider-prefixed key, a hex tail, a dictionary pair or base64 all HOLD
+        "hunter/two", "abc/def123==", "openai/" + "sk-9f2ac1b8e4d7", "z-ai/" + "9f2ac1b8e4d7c3a0",
+        "openrouter/" + "Qx9kLm2pR4sT", "needs " + "makerbase", "requires " + "hunter2",
+        # gate round 1 (gate_20260914-215739): provider/PASSWORD must hold - the right side needs a
+        # MODEL shape (dotted version, <n>b size or a family word), and a bare vendor word stays unknown
+        "openai/" + "makerbase", "postgres/" + "sunshine-dragon-42", "openai/" + "hunter2",
+        "x-ai/" + "admin", "nvidia", "password " + "nvidia", "z-ai", "the value " + "qwen",
     ]                             # real key OR a complete short password + prose ellipsis holds (round 4)                                                          # value never withdraws (round 2)
     check("evidence_names_withdraw", all(ds._evidence_is_name(n) for n in names),
           str([n for n in names if not ds._evidence_is_name(n)]))

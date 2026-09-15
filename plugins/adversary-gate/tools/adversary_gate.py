@@ -34,6 +34,7 @@ import argparse
 import ast
 import datetime
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -904,13 +905,16 @@ def _call_one_model(model, user_content, timeout=1200):
                 continue
             raise SystemExit("ADVERSARY GATE: OpenRouter HTTP %s: %s"
                              % (e.code, e.read().decode("utf-8", "replace")[:300]))
-        except OSError as e:
+        except (OSError, http.client.HTTPException) as e:
             # connection refused / DNS / TLS / a MID-STREAM read timeout or socket reset -
             # the canonical transport failures. Catch OSError (not just urllib URLError): a
             # bare TimeoutError from r.read() is an OSError, NOT a URLError, so the old
             # handler let it crash cmd_run with a traceback (surfaced on a large docs-build
-            # review). SystemExit fails CLOSED and advances the fallback chain. HTTPError is
-            # handled above (it subclasses OSError) so its 429 retry is unaffected.
+            # review). http.client.HTTPException is the OTHER family r.read() raises - a
+            # truncated chunked body is IncompleteRead, which is NOT an OSError and crashed
+            # a live gate run with a raw traceback (fleet unit-2 round 1, 2026-09-15).
+            # SystemExit fails CLOSED and advances the fallback chain. HTTPError is handled
+            # above (it subclasses OSError) so its 429 retry is unaffected.
             raise SystemExit("ADVERSARY GATE: network/read error reaching OpenRouter: %r"
                              % (getattr(e, "reason", e),))
     if d.get("error"):
@@ -957,7 +961,7 @@ def _call_xai(model, user_content, timeout):
     except urllib.error.HTTPError as e:
         raise SystemExit("ADVERSARY GATE: xAI HTTP %s: %s"
                          % (e.code, e.read().decode("utf-8", "replace")[:300]))
-    except OSError as e:
+    except (OSError, http.client.HTTPException) as e:   # IncompleteRead is not an OSError
         raise SystemExit("ADVERSARY GATE: network/read error reaching xAI: %r"
                          % (getattr(e, "reason", e),))
     try:

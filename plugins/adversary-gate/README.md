@@ -116,7 +116,7 @@ carries a secret literal or a docs-model block.
 ## Provenance
 
 This plugin is a versioned snapshot of the canonical suite in the Nexusmill Tools
-repo at commit `a6dcefa` (2026-09-14). The canonical source of truth remains that
+repo at commit `26280c7` (2026-09-15). The canonical source of truth remains that
 repo; the snapshot is updated deliberately, with the same adversarial review this
 tool enforces — every commit of this marketplace passes its own gate.
 
