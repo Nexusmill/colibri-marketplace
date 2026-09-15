@@ -1,0 +1,28 @@
+{
+ "type": "CLEAR",
+ "commit": "d41976bd813e079a3efa3e0593df5d8fc1d1cabf",
+ "when": "20260914-185813",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "cb685b27679bd5d3f97b4f63a89ae44594394952628d0a81a8ca98a3a48bc728",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260914-185808",
+   "artifact": ".adversary\\reviews\\gate_20260914-185808.md"
+  },
+  "plugins/adversary-gate/.claude-plugin/plugin.json": {
+   "sha": "effa36e941c6229e27284d1265b6cdb4b4e66832b950dd100942f7dd30031a2c",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260914-185808",
+   "artifact": ".adversary\\reviews\\gate_20260914-185808.md"
+  },
+  "plugins/adversary-gate/tools/install_gate.py": {
+   "sha": "bbee0fa0a721ebc6c29e6bf7f90d0964279ab0696b975bfdde7670c3fbdfec12",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260914-185808",
+   "artifact": ".adversary\\reviews\\gate_20260914-185808.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260914-185808.md": "model: z-ai/glm-5.3-flash | usage: {'prompt_tokens': 12780, 'completion_tokens': 13890, 'total_tokens': 26670, 'cost': 0.008862, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.008862, 'upstream_inference_prompt_cost': 0.001917, 'upstream_inference_completions_cost': 0.006945}, 'completion_tokens_details': {'reasoning_tokens': 13177, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/.claude-plugin/plugin.json', 'plugins/adversary-gate/tools/install_gate.py']\n\n## Adversarial review\n\n**Scope of the change:** version bumps (0.3.0 \u2192 0.3.1, consistent across `marketplace.json` and `plugin.json`), a module-docstring rewrite, and a rewrite of the printed \"NEXT\" arming sequence in `install_gate.py::main`. No executable logic, exit codes, config writes, or byte-canonicality checks are touched.\n\n**What I verified against the provided bytes:**\n\n- **Print-block formatting:** every `%`-formatted line has exactly one `%s` and one argument (`gate_path or \"<gate>\"`, `NOTES_REF` \u00d7 2); no stray `%` that would raise `TypeError`, no broken string continuity. The `gate_path` fallback matches the pre-existing pattern.\n- **Internal consistency of the new instructions:** step 3 (`run --context`, optional) \u2192 step 4 (commit; gate self-requests the review or re-checks the existing clearance keyed to the staged blob shas, which `update-index --chmod=+x` in step 2 does not alter) \u2192 step 5 (push). The docstring paragraph and the printed steps agree verbatim on the quoted gate message and the fail-silent detection rule (\"a code commit that lands SILENTLY means the hook did not run\").\n- **Proof value retained:** dropping the old explicit \"EXPECT commit REFUSED\" step does not weaken the arming proof \u2014 a hook that doesn't run, or runs fail-open, still produces a silent landing, which the new text explicitly flags and directs to `--verify-only`. Detection semantics are preserved.\n- **Consistency with the installer's own machinery:** the arming commit stages `.githooks/` (extensionless hook files = code class per the epoch rule), so a review is genuinely required and the commit-time automatic review path is the right expectation; `.adversary/` clearances are gitignored by the installer, so the step-3 clearance survives to the step-4 re-check without being committed.\n- **Version bump:** patch-level for a docs/instructions change; both manifests agree; no third version reference left stale in the staged files.\n\n**One claim I could not verify from the staged bytes:** step 5's \"the pre-push guard audits and pushes `refs/notes/adversary` itself\" (replacing the old manual `git push origin refs/notes/adversary` step), and the quoted `check`-mode message / `run --context` flag. These describe `adversary_gate.py` and the pre-push dispatcher, neither of which is in the staged set \u2014 and this diff does not touch them. The central behavior is explicitly attributed to a landed prior commit (9597241, 2026-09-07), and the installer's own pre-dated comments (2026-09-08 rulings) confirm the suite evolved after the 0.3.0 docs were written, making this the alignment release for that window. I find nothing in the provided bytes that contradicts these claims, and the files they describe are untouched by this change \u2014 so they do not rise to a finding, but the author should confirm the pre-push shim does in fact push the notes ref, since the new instructions remove the only stated manual fallback.\n\nNo logic errors, no broken callers, no exit-code or contract changes, no money-safety or security surface introduced.\n\nVERDICT: CLEAR"
+ }
+}
