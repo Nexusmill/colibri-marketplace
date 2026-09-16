@@ -1,0 +1,22 @@
+{
+ "type": "CLEAR",
+ "commit": "e6cd200c5b1cb92d573129ee648669890350e38f",
+ "when": "20260915-233742",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "f5ee28e22e41ca70a702eaa1fb1d6edabfc34a9cf1ca0cc191ba87245009d87f",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-233739",
+   "artifact": ".adversary\\reviews\\gate_20260915-233739.md"
+  },
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "27eb5e6c37f84151439693b656dd5def093a5e753c66d2b906dfdeb734517ae8",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-233739",
+   "artifact": ".adversary\\reviews\\gate_20260915-233739.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260915-233739.md": "model: z-ai/glm-5.3-flash | usage: {'prompt_tokens': 1584, 'completion_tokens': 1879, 'total_tokens': 3463, 'cost': 0.000882825, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.000882825, 'upstream_inference_prompt_cost': 0.0001782, 'upstream_inference_completions_cost': 0.000704625}, 'completion_tokens_details': {'reasoning_tokens': 1386, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/colibri-review/.claude-plugin/plugin.json']\n\nReviewed the staged change as an adversary. This is a metadata-only changeset: version bump 0.2.2 \u2192 0.3.0 and an extended description for `colibri-review`, mirrored in both `.claude-plugin/marketplace.json` and `plugins/colibri-review/.claude-plugin/plugin.json`.\n\nChecks performed:\n\n1. **JSON validity** \u2014 Both full staged files parse as well-formed JSON: no trailing commas, balanced braces/brackets, em-dashes and `&` are legal inside JSON strings. No schema-shape regressions: both plugin entries retain `name`, `source`, `description`, `version`, `author`, `license`, `keywords`; the `$schema`, marketplace `name`/`owner`, and the untouched `adversary-gate` entry (still 0.3.3) are byte-identical to prior context.\n\n2. **Cross-file consistency** \u2014 The `version` (\"0.3.0\") and `description` strings are exactly identical between marketplace.json and plugin.json, including the new sentence. No drift between the two copies.\n\n3. **Diff hunk accuracy** \u2014 The marketplace.json hunk (around line 25) and plugin.json hunk (line 1) match the full staged bytes; no lines were silently dropped or reordered; the `source: \"./plugins/colibri-review\"` pointer is unchanged, so the marketplace still resolves to the directory whose plugin.json was bumped in lockstep.\n\n4. **Description claims vs. repo reality** \u2014 The added sentence (\"Prior reviews load as context and every pass hunts new findings; three empty model types lock a file+mode until its bytes change\") is consistent with the repo's established `.colibri_reviews/_manifest.json` design (per-file record with a modes table keyed to bytes), i.e., it describes existing 0.3.0 behavior rather than asserting an unshipped feature. No code is staged in this changeset, so no call sites, callers, paths, state, or money/security surfaces are touched or enabled.\n\n5. **Versioning semantics** \u2014 Minor bump (0.2.2 \u2192 0.3.0) for a behavioral feature addition is coherent; no consumer-visible field other than version/description changed.\n\nNo logic, contract, consistency, or validity defect is introduced or enabled by these bytes.\n\nVERDICT: CLEAR"
+ }
+}
