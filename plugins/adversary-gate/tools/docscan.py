@@ -245,8 +245,9 @@ _PLACEHOLDER_TOKEN = None  # compiled lazily below (re is imported inside _evide
 def _evidence_is_name(reason):
     """True when the model's REASON line names NO value-shaped literal: every token is
     descriptive vocabulary, an ALL-CAPS identifier (an env-var NAME: underscored, no 3+ digit
-    run) or a provider name, and at least one identifier/provider is present. Any other token
-    - one with a symbol or a digit run, an un-underscored ALL-CAPS string (an AWS key id), or
+    run), a provider name, a placeholder, or a single ALPHANUMERIC character (never a credential),
+    and at least one identifier/provider/placeholder/single-character literal is present. Any other
+    token - one with a symbol or a digit run, an un-underscored ALL-CAPS string (an AWS key id), or
     any other word (a dictionary-word password like makerbase) - is treated as a VALUE. Empty,
     'none' or pure filler returns False so a contradictory BLOCK keeps blocking."""
     import re
@@ -289,6 +290,13 @@ def _evidence_is_name(reason):
             continue                      # ALL-CAPS value (AKIA...EXAMPLE) stays a value below
         low_whole = bare.lower()[:-2] if bare.lower().endswith("'s") else bare.lower()
         if low_whole in _DESCRIPTIVE:
+            continue
+        if len(bare) == 1 and bare.isalnum():
+            # a ONE-CHARACTER literal is never a credential (push-guard catch 2026-09-15 on the fleet
+            # probe push: a plan document's embedded test code `setenv("XAI_API_KEY", "k")` was
+            # quoted 3/3 as the secret value `"k"`). Exactly one letter or digit - `k7`, `PW`, a lone
+            # symbol and every longer token keep their value status below.
+            named = True
             continue
         if low_whole in _PROVIDERS:
             named = True                  # ANTHROPIC, GOOGLE - a provider in caps

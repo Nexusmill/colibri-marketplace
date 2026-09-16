@@ -92,7 +92,7 @@ troubleshooting chapter where every entry actually happened:
 ## Selftests (no network; the external model is stubbed)
 
 ```
-python <plugin-root>/tools/gate_selftest.py      # 113 checks - gate, notary, push guard, secret floor
+python <plugin-root>/tools/gate_selftest.py      # 126 checks - gate, notary, push guard, secret floor, removed-symbol refusal
 python <plugin-root>/tools/install_selftest.py   # 73 checks - installer claims incl. relocation
 python <plugin-root>/tools/audit_selftest.py     # 50 checks - bypass/forgery/override detection
 python <plugin-root>/tools/guard_selftest.py     # 231 checks - the harness deny-guard matrix
@@ -111,12 +111,26 @@ llama.cpp's `llama-cli` on PATH (or `NEXUSMILL_LLAMA_CLI=<path>`) and the GGUF a
 `NEXUSMILL_DOCSCAN_MODEL=<path>` plus `NEXUSMILL_DOCSCAN_MODEL_SHA` to pin it);
 `NEXUSMILL_DOCSCAN_NGL=0` for CPU-only. Secret-shaped hits WARN at commit and are
 scrubbed from the review payload; the PUSH guard refuses an outgoing commit that
-carries a secret literal or a docs-model block.
+carries a secret literal or a docs-model block. A docs-model BLOCK stands only when
+its REASON quotes a value: a variable name, a placeholder, a describing verb, a
+vendor/model slug or a one-character literal withdraws it, loudly, on stderr.
+
+## The removed-symbol refusal (deterministic, before any model call)
+
+A staged `.py` that removes a module-level `def`/`class` while a tracked, unstaged `.py`
+still references the name is refused with the callers listed - the external reviewer
+never sees unstaged files, so only arithmetic over the index can. Exactly two things
+shadow a name: the bystander's own module-level definition, and a `from X import name`
+whose X is a tracked, unstaged root-level module, the only path with that suffix in the
+tree, whose index blob defines the name and binds it nowhere else in module scope (a
+module-level star import disqualifies every def). Everything unprovable refuses - a bare use, a
+plain `import X`, an import from the definer, a staged/deleted/untracked source, a
+duplicate module name, a re-exporter, or a module the resolver cannot find at all.
 
 ## Provenance
 
 This plugin is a versioned snapshot of the canonical suite in the Nexusmill Tools
-repo at commit `26280c7` (2026-09-15). The canonical source of truth remains that
+repo at commit `b0de7ab` (2026-09-15). The canonical source of truth remains that
 repo; the snapshot is updated deliberately, with the same adversarial review this
 tool enforces — every commit of this marketplace passes its own gate.
 

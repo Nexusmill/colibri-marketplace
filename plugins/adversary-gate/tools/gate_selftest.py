@@ -1027,6 +1027,241 @@ def main():
           r.returncode == 1 and "REFUSED" in r.stdout and "reexport.py" in r.stdout,
           "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
     git(tmp, "reset", "-q", "--hard")
+    # 43. a same-named symbol that the bystander BINDS ITSELF is not a caller (gate catch
+    #     gate_20260915 on the fleet Atlas deletion: deleting a package that defined `main` was
+    #     refused because every other module's own `def main` and a `from deepagents import
+    #     create_deep_agent` were reported as callers - a whole-package deletion could never pass).
+    #     A module-level def/class of the name shadows it; so does `from X import name` ONLY on
+    #     positive proof - X is a tracked, unstaged module at the repo root, the only path with
+    #     that suffix anywhere in the non-ignored tree, and its index blob defines the name (the
+    #     `from fleet.cli import main` shape: vendored.py's `from mytool import keep`). Everything
+    #     unresolvable - an external package, an untracked module, a re-exporter, a duplicate
+    #     name - stays a caller (44-51): over-refuse, never under-refuse.
+    #     (the fixture repo is ARMED: every commit below needs a faked-CLEAR `gate run` first, and
+    #     the real callers of `keep` - caller.py, commenter.py (35), reexport.py (41) - are removed
+    #     or re-pointed in the same staged set, so only the shadowed bystanders remain)
+    open(os.path.join(tmp, "mytool.py"), "w").write(
+        "def keep():\n    return 'own'\n\n\ndef run():\n    return keep()\n")
+    open(os.path.join(tmp, "vendored.py"), "w").write("from mytool import keep\n\n\ndef use():\n    return keep()\n")
+    open(os.path.join(tmp, "bare.py"), "w").write("x = 1\n")
+    open(os.path.join(tmp, "user2.py"), "w").write("def go():\n    return 2\n")
+    git(tmp, "add", "mytool.py", "vendored.py", "bare.py", "user2.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "bystanders that bind keep themselves")
+
+    def _delete_lib_with_its_real_callers():
+        git(tmp, "rm", "-q", "lib.py", "reexport.py", "commenter.py")
+        open(os.path.join(tmp, "caller.py"), "w").write("def use():\n    return 1\n")
+        git(tmp, "add", "caller.py")
+
+    _delete_lib_with_its_real_callers()
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_shadowed_by_own_binding_not_a_caller",
+          r.returncode == 0 and "CLEAR" in r.stdout and "REFUSED" not in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 44. fail-closed kept: a bare unbound use of the name in a bystander still refuses, and the
+    #     shadowed bystanders are not named
+    open(os.path.join(tmp, "bare.py"), "w").write("x = keep\n")
+    git(tmp, "add", "bare.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "bare unbound use")
+    _delete_lib_with_its_real_callers()
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_bare_unbound_use_still_refused",
+          r.returncode == 1 and "REFUSED" in r.stdout and "bare.py" in r.stdout
+          and "mytool.py" not in r.stdout and "vendored.py" not in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 45. fail-closed kept: an import from a RE-EXPORTER that the same change deletes is a caller
+    #     (`reexport.py` = `from lib import keep` goes with lib.py; user2.py still does
+    #     `from reexport import keep` -> the binding cannot be trusted as the bystander's own)
+    open(os.path.join(tmp, "bare.py"), "w").write("x = 1\n")
+    open(os.path.join(tmp, "user2.py"), "w").write("from reexport import keep\n\n\ndef go():\n    return keep()\n")
+    git(tmp, "add", "bare.py", "user2.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "user2 imports keep through the re-exporter")
+    _delete_lib_with_its_real_callers()
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_import_from_deleted_reexporter_still_refused",
+          r.returncode == 1 and "REFUSED" in r.stdout and "user2.py" in r.stdout
+          and "mytool.py" not in r.stdout and "vendored.py" not in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 46. fail-closed kept: an import from an UNSTAGED tracked aggregator that re-exports the name
+    #     transitively (`agg.py` = `from lib import *`, a pre-existing blind spot of the scan) is a
+    #     caller - a tracked source shadows only when its own blob DEFINES the name (vendored.py's
+    #     `mytool` does, so it is still not named)
+    open(os.path.join(tmp, "agg.py"), "w").write("from lib import *\n")
+    open(os.path.join(tmp, "user2.py"), "w").write("from agg import keep\n\n\ndef go():\n    return keep()\n")
+    git(tmp, "add", "agg.py", "user2.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "user2 imports keep through a star-importing aggregator")
+    _delete_lib_with_its_real_callers()
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_import_via_unstaged_star_reexporter_still_refused",
+          r.returncode == 1 and "REFUSED" in r.stdout and "user2.py" in r.stdout
+          and "mytool.py" not in r.stdout and "vendored.py" not in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 47. the import name is resolved from the ROOT and from the BYSTANDER'S OWN DIRECTORY, not by
+    #     mangling the definer's path (gate catch gate_20260915-162201: `adversary-gate/x.py` can
+    #     never equal an import name, so a sibling `from x import gone` was called external and
+    #     vouched). Definer `sub-dir/mylib.py` (keep2), bystander `sub-dir/user3.py`
+    #     (`from mylib import keep2`): deleting mylib.py must refuse naming user3.py.
+    os.makedirs(os.path.join(tmp, "sub-dir"), exist_ok=True)
+    open(os.path.join(tmp, "sub-dir", "mylib.py"), "w").write("def keep2():\n    return 1\n")
+    open(os.path.join(tmp, "sub-dir", "user3.py"), "w").write(
+        "from mylib import keep2\n\n\ndef go():\n    return keep2()\n")
+    git(tmp, "add", "sub-dir/mylib.py", "sub-dir/user3.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "a hyphenated directory with a definer and its sibling caller")
+    git(tmp, "rm", "-q", "sub-dir/mylib.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_sibling_import_in_hyphenated_dir_still_refused",
+          r.returncode == 1 and "REFUSED" in r.stdout and "user3.py" in r.stdout and "keep2" in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 48. an UNTRACKED worktree module cannot vouch, and neither can an EXTERNAL one: `ext.py`
+    #     does `from third import keep` - refused both with an untracked third.py present in the
+    #     worktree and with no third.py anywhere (static resolution cannot prove "external": a
+    #     src/ layout or a sys.path entry hides repo code behind such a name - gate catch
+    #     gate_20260915-165305); ext.py stays in the fixture as a standing caller from here on
+    open(os.path.join(tmp, "ext.py"), "w").write("from third import keep\n\n\ndef use():\n    return keep()\n")
+    git(tmp, "add", "ext.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "a bystander importing keep from an unknown module")
+    open(os.path.join(tmp, "third.py"), "w").write("from lib import keep\n")
+    _delete_lib_with_its_real_callers()
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_untracked_worktree_source_cannot_vouch",
+          r.returncode == 1 and "REFUSED" in r.stdout and "ext.py" in r.stdout and "mytool.py" not in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    os.remove(os.path.join(tmp, "third.py"))
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_external_source_cannot_vouch",
+          r.returncode == 1 and "REFUSED" in r.stdout and "ext.py" in r.stdout and "vendored.py" not in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 49. candidate precedence: a bystander's OWN directory wins (Python puts the script's directory
+    #     first on sys.path), and a vouch needs EVERY resolvable candidate to define the name -
+    #     root `dupname.py` defines keep, but the surviving tracked `sub-dir/dupname.py` only
+    #     re-exports the removed one, so `sub-dir/user4.py`'s `from dupname import keep` is a live caller
+    open(os.path.join(tmp, "dupname.py"), "w").write("def keep():\n    return 'root'\n")
+    open(os.path.join(tmp, "sub-dir", "dupname.py"), "w").write("from lib import keep\n")
+    open(os.path.join(tmp, "sub-dir", "user4.py"), "w").write(
+        "from dupname import keep\n\n\ndef go():\n    return keep()\n")
+    git(tmp, "add", "dupname.py", "sub-dir/dupname.py", "sub-dir/user4.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "same module name at the root and beside the caller")
+    _delete_lib_with_its_real_callers()                                       # sub-dir/dupname.py survives, unstaged
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_sibling_candidate_outranks_root_definer",
+          r.returncode == 1 and "REFUSED" in r.stdout and "user4.py" in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 50. a root module that exists but only RE-EXPORTS the name is not proof: `rex.py` =
+    #     `from lib import keep`, `user5.py` = `from rex import keep` -> both are callers
+    open(os.path.join(tmp, "rex.py"), "w").write("from lib import keep\n")
+    open(os.path.join(tmp, "user5.py"), "w").write("from rex import keep\n\n\ndef go():\n    return keep()\n")
+    git(tmp, "add", "rex.py", "user5.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "a root re-exporter and its user")
+    _delete_lib_with_its_real_callers()
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_root_reexporter_is_not_proof",
+          r.returncode == 1 and "REFUSED" in r.stdout and "user5.py" in r.stdout and "rex.py" in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 51. a plain `import pkg.sub` never shadows a removed name (gate catch gate_20260915-165305):
+    #     package `mpk/__init__.py` defines `mpk`; user6.py does `import mpk.helpers` and uses the
+    #     bare name `mpk`; deleting the package must refuse naming user6.py (the bare use is the
+    #     package object, now gone - an import binding is not the bystander's own definition)
+    os.makedirs(os.path.join(tmp, "mpk"), exist_ok=True)
+    open(os.path.join(tmp, "mpk", "__init__.py"), "w").write("def mpk():\n    return 1\n")
+    open(os.path.join(tmp, "mpk", "helpers.py"), "w").write("X = 1\n")
+    open(os.path.join(tmp, "user6.py"), "w").write("import mpk.helpers\n\n\ndef go():\n    return mpk\n")
+    git(tmp, "add", "mpk/__init__.py", "mpk/helpers.py", "user6.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "a package whose __init__ defines its own name, and a dotted importer")
+    git(tmp, "rm", "-q", "-r", "mpk")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_plain_import_never_shadows",
+          r.returncode == 1 and "REFUSED" in r.stdout and "user6.py" in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 52. a def that the same module later RE-BINDS is not proof (marketplace gate catch gate_20260915-182919):
+    #     `mytool2.py` = `def keep()` + `from lib import keep` (the pure-Python-fallback-then-rebind shape),
+    #     `user7.py` = `from mytool2 import keep` + bare use; deleting lib.py must name user7.py as well as
+    #     mytool2.py - a name with ANY other module-level binding in the vouch target does not vouch
+    open(os.path.join(tmp, "mytool2.py"), "w").write(
+        "def keep():\n    return 'fallback'\n\n\nfrom lib import keep  # noqa: E402\n")
+    open(os.path.join(tmp, "user7.py"), "w").write("from mytool2 import keep\n\n\ndef go():\n    return keep()\n")
+    git(tmp, "add", "mytool2.py", "user7.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "a definer that re-binds its own def, and its user")
+    _delete_lib_with_its_real_callers()
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_rebound_def_is_not_proof",
+          r.returncode == 1 and "REFUSED" in r.stdout and "user7.py" in r.stdout and "mytool2.py" in r.stdout
+          and "vendored.py" not in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 53. the WILDCARD twin (marketplace gate catch gate_20260915-184551): `mytool3.py` = `def keep()` +
+    #     `from lib import *` - the star import re-binds every public name but is itself never a listed
+    #     caller, so before the fix NOBODY was named and the deletion CLEARed; `user8.py` =
+    #     `from mytool3 import keep` + bare use must be named. A vouch target with a module-level star
+    #     import vouches for nothing.
+    open(os.path.join(tmp, "mytool3.py"), "w").write(
+        "def keep():\n    return 'fallback'\n\n\nfrom lib import *  # noqa: E402,F403\n")
+    open(os.path.join(tmp, "user8.py"), "w").write("from mytool3 import keep\n\n\ndef go():\n    return keep()\n")
+    git(tmp, "add", "mytool3.py", "user8.py")
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(tmp, "commit", "-q", "-m", "a definer that star-imports over its own def, and its user")
+    _delete_lib_with_its_real_callers()
+    r = gate(tmp, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    check("removed_symbol_star_import_over_def_is_not_proof",
+          r.returncode == 1 and "REFUSED" in r.stdout and "user8.py" in r.stdout and "vendored.py" not in r.stdout,
+          "rc=%d %s" % (r.returncode, (r.stdout + r.stderr)[-300:]))
+    git(tmp, "reset", "-q", "--hard")
+    # 54. the binding shapes `_sole_module_level_defs` must see, pinned on the function itself: a star import
+    #     empties the set; a walrus, an `except ... as`, a `match` capture, a `del`, a second def of the
+    #     same name and a def inside `if`/`try` all exclude the name; a METHOD of the same name inside a
+    #     class and a function-LOCAL assignment do not (they never re-bind the module attribute)
+    sd = _g._sole_module_level_defs
+    shapes_ok = (
+        sd("def keep():\n    pass\nfrom lib import *\n") == set()
+        and sd("def keep():\n    pass\n(keep := 1)\n") == set()
+        and sd("def keep():\n    pass\ntry:\n    pass\nexcept Exception as keep:\n    pass\n") == set()
+        and sd("def keep():\n    pass\nmatch 1:\n    case keep:\n        pass\n") == set()
+        and sd("def keep():\n    pass\ndel keep\n") == set()
+        and sd("def keep():\n    pass\ndef keep():\n    pass\n") == set()
+        and sd("def keep():\n    pass\nif x:\n    def keep():\n        pass\n") == set()
+        and sd("def keep():\n    pass\ntry:\n    from accel import keep\nexcept ImportError:\n    pass\n") == set()
+        and sd("def keep():\n    pass\nfor keep in ():\n    pass\n") == set()
+        # round 9 (gate_20260915-185436): a match MAPPING-REST capture and a walrus inside a def's or a
+        # lambda's DEFAULT arguments (evaluated in module scope at def time) re-bind the name too
+        and sd("def keep():\n    pass\nmatch d:\n    case {**keep}:\n        pass\n") == set()
+        and sd("def keep():\n    pass\ndef run(x=(keep := 1)):\n    pass\n") == {"run"}
+        and sd("def keep():\n    pass\nf = lambda x=(keep := 2): x\n") == set()
+        and sd("def keep():\n    pass\nasync def run(*, x=(keep := 1)):\n    pass\n") == {"run"}
+        # round 10 (gate_20260915-190345): class bases, class keywords and a def's return annotation are
+        # evaluated in module scope at definition time too
+        and sd("def keep():\n    pass\nclass C((keep := object)):\n    pass\n") == {"C"}
+        and sd("def keep():\n    pass\nclass C(metaclass=(keep := type)):\n    pass\n") == {"C"}
+        and sd("def keep():\n    pass\ndef run() -> (keep := int):\n    pass\n") == {"run"}
+        and sd("def keep():\n    pass\ndef run(x: (keep := int)):\n    pass\n") == {"run"}
+        # round 11 (marketplace gate_20260915-192907): a `global` declaration inside ANY nested body re-binds
+        # the module attribute when that body runs - a class body runs at import, a function body when
+        # called - so a declared global excludes the name from every body (over-refuse for the function case)
+        and sd("def keep():\n    pass\nclass C:\n    global keep\n    keep = 1\n") == {"C"}
+        and sd("def keep():\n    pass\ndef run():\n    global keep\n    keep = 2\n") == {"run"}
+        and sd("def keep():\n    pass\nclass C:\n    def m(self):\n        global keep\n        del keep\n") == {"C"}
+        and sd("def keep():\n    pass\nclass C:\n    def keep(self):\n        pass\n") == {"keep", "C"}
+        and sd("def keep():\n    pass\ndef run():\n    keep = 1\n    return keep\n") == {"keep", "run"}
+        and sd("def keep(:\n") is None
+    )
+    check("sole_module_level_defs_binding_shapes", shapes_ok)
 
     # 42. doctrine the reviewer must not re-litigate (2026-09-10): a colibri manifest row keyed by
     #     an ABSOLUTE path with rel/modes is the canonical shape (store.py writes it) - three

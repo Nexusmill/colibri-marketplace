@@ -90,6 +90,10 @@ def main():
         model_slug, "the OpenRouter model id " + model_slug, "the default reviewer " + model_slug
         + " and its XAI_API_KEY fallback", "model slug " + "x-ai/" + "grok-4.6",
         "meta-llama/" + "llama-3.1-70b-instruct", "deepseek/" + "deepseek-chat", "openai/" + "gpt-4o",
+        # push-guard catch 2026-09-15 (the fleet probe push, chunk 11 of 35, 3/3): a plan document's
+        # embedded test code `monkeypatch.setenv("XAI_API_KEY", "k")` - the model quoted `"k"` as the
+        # secret value. A ONE-CHARACTER literal is never a credential and names no value.
+        '"k"', "'k'", "k", 'XAI_API_KEY set to "k"', "the value " + "7",
     ]                                                       # ELIDED vendor prefix names no value                                                       # vocabulary (fleet probe 2026-09-08)
     aws_example = "AKIA" + "IOSFODNN7" + "EXAMPLE"          # gate round 1: an ALL-CAPS VALUE
     project_id = "crafty-" + "hook-" + "483415" + "-b3"
@@ -116,6 +120,8 @@ def main():
         # MODEL shape (dotted version, <n>b size or a family word), and a bare vendor word stays unknown
         "openai/" + "makerbase", "postgres/" + "sunshine-dragon-42", "openai/" + "hunter2",
         "x-ai/" + "admin", "nvidia", "password " + "nvidia", "z-ai", "the value " + "qwen",
+        # the one-character rule stops at ONE: two characters and up stay values (PW above holds too)
+        '"k7"', "k7", "kQ", "k7Qz", 'XAI_API_KEY set to "k7"',
     ]                             # real key OR a complete short password + prose ellipsis holds (round 4)                                                          # value never withdraws (round 2)
     check("evidence_names_withdraw", all(ds._evidence_is_name(n) for n in names),
           str([n for n in names if not ds._evidence_is_name(n)]))

@@ -1036,6 +1036,87 @@ def _module_level_names(src):
     return {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
 
 
+# `match` pattern nodes exist from CPython 3.10; resolved defensively so an older interpreter's hook
+# degrades to "no match captures" instead of an AttributeError on the first visited node (round 10)
+_MATCH_CAPTURES = tuple(getattr(ast, n) for n in ("MatchAs", "MatchStar") if hasattr(ast, n))
+_MATCH_MAPPING = tuple(getattr(ast, n) for n in ("MatchMapping",) if hasattr(ast, n))
+
+
+def _sole_module_level_defs(src):
+    """Module-level def/class names (direct children of the module body) whose ONLY binding anywhere in
+    MODULE scope is that def/class. Module scope = every statement reachable from the module body without
+    entering a def, lambda or class body - so `if`/`try`/`for`/`with`/`match` blocks count, a method or a
+    function-local variable of the same name does not (they never re-bind the module attribute). A name
+    is excluded when module scope also binds it by an import (`import m as N`, `from m import N`), an
+    assignment of any shape (Name targets in Assign/AnnAssign/AugAssign/NamedExpr/for/with, nested tuples,
+    lists, starred - a walrus inside a def's default arguments, annotations or return annotation, a
+    lambda's defaults, or a class's bases or keywords included), a `del`, an
+    `except ... as N`, a `match` capture (`case N:`, `case [*N]:`, `case {**N}:`), a `global`/`nonlocal` declared
+    at module scope OR inside any nested body (a class body runs at import, a function body when called), or a second
+    def/class of the same name (a def inside `if`/`try` included). A module-level `from m import *`
+    re-binds every public name, so it disqualifies EVERYTHING (marketplace gate catches gate_20260915-182919
+    and -184551: a def-then-rebind and a def-then-star-import both vouched for their importers). None when
+    the source does not parse."""
+    names = _module_level_names(src)
+    if names is None:
+        return None
+    other = {}                                      # name -> count of module-scope bindings
+    star = [False]
+
+    def bind(name):
+        other[name] = other.get(name, 0) + 1
+
+    def visit(node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bind(node.name)                         # the def itself counts once; a second one excludes
+            for d in node.decorator_list:           # decorators run in module scope
+                visit(d)
+            if isinstance(node, ast.ClassDef):      # bases and keywords (metaclass=...) evaluate in
+                for b in node.bases:                # module scope at class-definition time (round 10)
+                    visit(b)
+                for k in node.keywords:
+                    visit(k.value)
+            else:                                   # default arguments, annotations and the return
+                visit(node.args)                    # annotation are EVALUATED in module scope at def
+                if node.returns is not None:        # time - a walrus there re-binds (rounds 9-10)
+                    visit(node.returns)
+            for sub in ast.walk(node):              # ...except a `global N` declared in ANY nested body: a
+                if isinstance(sub, (ast.Global, ast.Nonlocal)):  # class body runs at import, a function
+                    for n in sub.names:             # body when called - either re-binds module.N
+                        bind(n)                     # (round 11, marketplace gate_20260915-192907)
+            return                                  # never enter the body otherwise: a method / local never rebinds
+        if isinstance(node, ast.Lambda):
+            visit(node.args)                        # same for a lambda's defaults; never its body
+            return
+        if isinstance(node, ast.Import):
+            for al in node.names:
+                bind(al.asname or al.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for al in node.names:
+                if al.name == "*":
+                    star[0] = True
+                else:
+                    bind(al.asname or al.name)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            for n in node.names:
+                bind(n)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bind(node.name)
+        elif isinstance(node, _MATCH_CAPTURES) and node.name:
+            bind(node.name)
+        elif isinstance(node, _MATCH_MAPPING) and node.rest:
+            bind(node.rest)                         # `case {**rest}:` - a str field, never a child node
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bind(node.id)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(ast.parse(src))
+    if star[0]:
+        return set()
+    return {n for n in names if other.get(n, 0) <= 1}
+
+
 def _staged_python_pairs():
     """[(old_path, new_path)] for every staged .py: M/T keep their path, R carries the OLD path
     (its HEAD blob is the one whose symbols may vanish), A has no old blob (old_path None), D has
@@ -1080,8 +1161,19 @@ def _removed_symbol_callers():
     CLEARed - the reviewer only ever sees the staged files, so no prompt can see an unstaged
     caller; only arithmetic over the frozen index can. A new blob that does not parse, a deleted
     module, or a rename to a non-.py path counts as removing every old name. Names are matched
-    UNQUALIFIED: an unrelated same-named symbol elsewhere is reported too, so this over-refuses
-    rather than under-refuses (stage that file or keep the name). The tracked listing is
+    unqualified EXCEPT where the bystander binds the name itself (2026-09-15, the fleet Atlas
+    deletion: a package defining `main` could never be deleted because every other module's own
+    `def main` and a `from deepagents import create_deep_agent` were reported as callers) - a
+    module-level def/class of the name, or a MODULE-LEVEL `from m import name` whose source is
+    PROVEN to define the name itself (see _SourceResolver: m maps to a tracked, unstaged file at
+    the repo root that is the only path with that suffix anywhere in the non-ignored tree and
+    whose index blob defines the name) - shadows it; everything else refuses: a bare unbound
+    use, an attribute use, a plain `import m` (it binds the module object, never a shadow), a
+    relative import, an import from the definer, its package, a staged module, an untracked or
+    ignored module, a module static resolution cannot find at all (a src/ layout or a sys.path
+    entry hides repo code behind such a name - gate catch gate_20260915-165305), a duplicated
+    module name, or a tracked module that merely re-exports (`from M import *`, `S = M.S`, a
+    `__getattr__`) - over-refuse rather than under-refuse. The tracked listing is
     root-anchored (`ls-files --full-name -- :/`) because a manual run from a subdirectory must
     see callers everywhere (gate catch gate_20260909-140534: a cwd-scoped listing was fail-open).
     Runs under the review's frozen index (GIT_INDEX_FILE) and review base, so the reviewed
@@ -1104,24 +1196,154 @@ def _removed_symbol_callers():
     hits = []
     tracked = [f for f in _run_git(["ls-files", "-z", "--full-name", "--", ":/"]).split("\0")
                if _is_py(f) and f not in staged]
+    staged_modules = {_module_name(p) for p in staged if _is_py(p)}
+    untracked = [f for f in _run_git(["ls-files", "-z", "-o", "--exclude-standard", "--full-name",
+                                      "--", ":/"]).split("\0") if _is_py(f)]
+    resolver = _SourceResolver(_repo_root(), set(tracked), staged, untracked, staged_modules, removed)
     for path in tracked:
         try:
             tree = ast.parse(_run_git(["show", ":" + path]))
         except (SyntaxError, ValueError):
             continue                                # an unparsable bystander cannot be a caller
+        shadow = _own_bindings(tree, resolver, path)
         for node in ast.walk(tree):
             if isinstance(node, ast.Name):
-                names = [node.id]
+                names = [node.id] if node.id not in shadow else []
             elif isinstance(node, ast.Attribute):
                 names = [node.attr]
-            elif isinstance(node, (ast.Import, ast.ImportFrom)):
-                names = [a.name.split(".")[-1] for a in node.names]   # `from m import gone`, re-exports
+            elif isinstance(node, ast.Import):
+                names = [a.name.split(".")[-1] for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                # `from m import gone` is a caller unless m provably cannot hand out the removed
+                # symbol (see _SourceResolver.vouches) - fail-closed on everything unresolvable
+                names = [a.name for a in node.names
+                         if a.name in removed and not resolver.vouches(node, a.name, path)]
             else:
                 continue
             for name in names:
                 if name in removed:
                     hits.append((path, node.lineno, name, removed[name]))
     return sorted(set(hits))
+
+
+def _module_name(py_path):
+    """'pkg/mod.py' -> 'pkg.mod'; 'pkg/__init__.py' -> 'pkg'."""
+    dotted = py_path.replace("\\", "/")[:-3].replace("/", ".")
+    return dotted[:-9] if dotted.endswith(".__init__") else dotted
+
+
+def _imports_definer(node, defining_path):
+    """True when an ImportFrom may bind the removed symbol: relative or moduleless imports (unresolvable
+    here -> assume yes), the defining module itself, or any parent package of it (a re-export)."""
+    if node.level or not node.module:
+        return True
+    dm = _module_name(defining_path)
+    return node.module == dm or dm.startswith(node.module + ".")
+
+
+def _from_staged(node, staged_modules):
+    """True when an ImportFrom draws from a module the change stages (deleted or rewritten) or from a
+    package that contains one: such a source cannot vouch that the binding is the bystander's own."""
+    m = node.module or ""
+    return m in staged_modules or any(s.startswith(m + ".") for s in staged_modules)
+
+
+class _SourceResolver(object):
+    """Decides whether `from m import name` in a bystander PROVABLY binds something other than a
+    removed symbol. Static resolution cannot prove that a module is external: a src/ layout, a
+    sys.path entry, a namespace package or a not-yet-tracked file all put repo code behind an
+    import name that resolves to nothing under the root (gate catches gate_20260915-162201,
+    -163235 and -165305 each exploited a "not found -> external -> vouch" branch), so "not found"
+    REFUSES. The only vouch is positive proof: m's dotted path names a TRACKED, UNSTAGED file at
+    the repo root (`m/.../mod.py` or `.../__init__.py`); that file is the ONLY path with that
+    suffix anywhere in the non-ignored tree (tracked, staged - deleted old paths included - or
+    untracked); no unlisted (ignored) file sits at the root or beside the bystander under the same
+    name; and the file's INDEX blob defines the name at module level (the `from fleet.cli import
+    main` shape). Everything else is a caller: relative or moduleless imports, the definer or its
+    parent packages, any staged module, a duplicated module name, an untracked or ignored
+    candidate, and a tracked module that only re-exports the name (`from M import *`, `S = M.S`,
+    a module `__getattr__`) - over-refuse, never under-refuse."""
+
+    def __init__(self, root, tracked, staged_paths, untracked, staged_modules, removed):
+        self._root = root
+        self._tracked = set(tracked)                # unstaged tracked .py paths
+        self._staged_paths = set(staged_paths)      # every staged path, DELETED old paths included
+        self._untracked = set(untracked)            # worktree .py paths git does not track or ignore
+        self._staged = staged_modules
+        self._removed = removed
+        self._defs = {}                             # tracked path -> set of module-level names
+
+    @staticmethod
+    def _tails(module):
+        rel = module.replace(".", "/")
+        return (rel + ".py", rel + "/__init__.py")
+
+    def _suffix_matches(self, module):
+        """Every listed path - tracked, staged or untracked - that the module's dotted path could
+        name at ANY depth (`pkg/lib.py` matches `src/pkg/lib.py` and `tools/pkg/lib/__init__.py`)."""
+        tails = self._tails(module)
+        deep = tuple("/" + t for t in tails)
+        return sorted(p for p in (self._tracked | self._staged_paths | self._untracked)
+                      if p in tails or p.endswith(deep))
+
+    def resolve(self, module, bystander):
+        """The single root file that may vouch for `module`, or None when the proof fails: no match
+        anywhere (unprovable, so external is NOT assumed), more than one match, a match that is not
+        the root file, a staged or untracked match, or an unlisted (ignored) file under the same
+        name at the root or beside the bystander that Python could import instead."""
+        tails = self._tails(module)
+        found = self._suffix_matches(module)
+        if len(found) != 1 or found[0] not in tails or found[0] not in self._tracked:
+            return None
+        bases = [""]
+        if "/" in bystander:
+            bases.append(bystander.rsplit("/", 1)[0] + "/")
+        for b in bases:
+            for t in tails:
+                cand = b + t
+                if cand != found[0] and os.path.exists(os.path.join(self._root, cand)):
+                    return None
+        return found[0]
+
+    def _module_defs(self, path):
+        """Module-level def/class names of the candidate's INDEX blob that have NO other module-level
+        binding there. A def the same module later re-binds - `def keep(): ...` then `from lib import
+        keep`, `import lib as keep`, `keep = lib.keep` (the pure-Python-fallback-then-accelerator shape) -
+        is not proof of anything: at runtime the name is whatever the last binding made it (marketplace
+        gate catch gate_20260915-182919, selftest check 52). Over-refuse, never under-refuse."""
+        if path not in self._defs:
+            names = _sole_module_level_defs(_run_git(["show", ":" + path]))
+            self._defs[path] = names if names is not None else set()
+        return self._defs[path]
+
+    def vouches(self, node, name, bystander):
+        """True only on the positive proof described above; every unresolvable case is False."""
+        module = node.module or ""
+        if node.level or not module:
+            return False
+        defining = self._removed.get(name)
+        if defining is not None and _imports_definer(node, defining):
+            return False
+        if _from_staged(node, self._staged):
+            return False
+        path = self.resolve(module, bystander)
+        return path is not None and name in self._module_defs(path)
+
+
+def _own_bindings(tree, resolver, bystander):
+    """Names a bystander binds for itself at MODULE level: def/class names, plus `from m import name`
+    bindings whose source provably defines the name itself (resolver.vouches). A use of such a name
+    refers to the bystander's own object, not to the removed symbol. A plain `import m` binds the
+    module object and never shadows a removed name (gate catch gate_20260915-165305: `import
+    mpk.helpers` suppressed a bare use of a removed `mpk`); function-local imports do not shadow
+    either (a module-level bare use is not covered by them)."""
+    own = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            for a in node.names:
+                if a.name not in resolver._removed or resolver.vouches(node, a.name, bystander):
+                    own.add(a.asname or a.name)
+    return own
 
 
 def _print_removed_symbol_refusal(hits, stream):

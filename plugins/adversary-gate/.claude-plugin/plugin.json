@@ -1,6 +1,6 @@
 {
   "name": "adversary-gate",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "A mandatory adversarial commit gate for git repos: no code commit lands without an independent external model reading the exact staged bytes and issuing VERDICT: CLEAR; every landed commit carries durable git-notes evidence; un-evidenced history cannot be pushed; CI re-verifies everything. Four enforcement layers, honest threat model: detection is the guarantee, prevention is not claimed.",
   "author": {
     "name": "Nexusmill"
