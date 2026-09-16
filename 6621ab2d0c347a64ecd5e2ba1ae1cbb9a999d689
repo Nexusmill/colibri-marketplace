@@ -1,0 +1,46 @@
+{
+ "type": "CLEAR",
+ "commit": "6621ab2d0c347a64ecd5e2ba1ae1cbb9a999d689",
+ "when": "20260915-194609",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "85c57f46a150491621e2dcacffba8cb242ce5ae030dff8790bcf85f2225e55f8",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-194533",
+   "artifact": ".adversary\\reviews\\gate_20260915-194533.md"
+  },
+  "plugins/adversary-gate/.claude-plugin/plugin.json": {
+   "sha": "248009bc76719f13938a4c2e7801b86b75efb3a4e980db09acf5bc14a348cb56",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-194533",
+   "artifact": ".adversary\\reviews\\gate_20260915-194533.md"
+  },
+  "plugins/adversary-gate/tools/adversary_gate.py": {
+   "sha": "288570a5b42f9f6d3c5f5a8529e6ed69a817d5d6baecfc4f6813dbdddd49150d",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-194533",
+   "artifact": ".adversary\\reviews\\gate_20260915-194533.md"
+  },
+  "plugins/adversary-gate/tools/docscan.py": {
+   "sha": "97db46fbda940fc98ee9bae22ef835d6aab87402f8136172263df83f3ed57f0d",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-194533",
+   "artifact": ".adversary\\reviews\\gate_20260915-194533.md"
+  },
+  "plugins/adversary-gate/tools/docscan_selftest.py": {
+   "sha": "9b154f4b3d7098ade1dd9a06f9d98bb73324485a5c43ad08ccb8704f62cdddba",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-194533",
+   "artifact": ".adversary\\reviews\\gate_20260915-194533.md"
+  },
+  "plugins/adversary-gate/tools/gate_selftest.py": {
+   "sha": "45a25ff5096198e25d57f68f2990a275c0ceec163413ad379133acc4a64b61d5",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260915-194533",
+   "artifact": ".adversary\\reviews\\gate_20260915-194533.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260915-194533.md": "model: z-ai/glm-5.3-flash | usage: {'prompt_tokens': 75758, 'completion_tokens': 36404, 'total_tokens': 112162, 'cost': 0.0221447093, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0221447093, 'upstream_inference_prompt_cost': 0.0085114113, 'upstream_inference_completions_cost': 0.013633298}, 'completion_tokens_details': {'reasoning_tokens': 35356, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/.claude-plugin/plugin.json', 'plugins/adversary-gate/tools/adversary_gate.py', 'plugins/adversary-gate/tools/docscan.py', 'plugins/adversary-gate/tools/docscan_selftest.py', 'plugins/adversary-gate/tools/gate_selftest.py']\n\n## Adversarial review \u2014 plugin 0.3.3 round 4 (b0de7ab vendored bytes)\n\nThis change loosens a fail-closed scan (`_removed_symbol_callers`), so the only defect class that matters is **under-refusal**: a real caller of a removed symbol that the new shadow/vouch logic now silences. I attacked that direction systematically; I also verified the rebuttal's claims against the staged bytes.\n\n**Round-3 fix verified in the bytes.** The def/class branch of `_sole_module_level_defs` now `ast.walk`s the whole subtree and binds every `Global`/`Nonlocal` name at any depth; the three new check-54 pins (`class C: global keep`, function-body `global`, nested `global`+`del`) match the implementation; no `targets()` helper remains; shapes_ok contains exactly the claimed 23 shapes. Claim stands.\n\n**Under-refusal vectors hunted, all closed:**\n\n- **Def-then-rebind in the bystander** (`def keep()` followed by an unvouched `from lib import keep`, the exact shape `_module_defs` guards on the *vouch* side): `_own_bindings`' coarse def set does suppress the bare uses \u2014 but the walker's `ImportFrom` branch never consults `shadow` and returns `vouches() == False` for the definer, so the import line itself is a hit. Refusal holds. The reverse order (import then def) is genuinely shadowed \u2014 correct.\n- **Alias forms**: `from lib import keep as g` \u2192 import line hit (bare `g` isn't the removed name); `from lib import other as keep` with `other` not removed \u2192 binding is `lib.other`, which survives \u2014 suppression correct; with `other` also removed \u2192 definer branch refuses.\n- **Module-scope rebinding forms that escape the def shadow without an Attribute/ImportFrom**: assignments/walrus/for/with/except/match/del bind the bystander's own value (suppression then correct); the only escape is string-dynamic rebinding (`getattr(lib, \"keep\")` after an own def), which is outside any syntax-level scan's contract and contrived \u2014 an accepted residual of the documented design, not a defect this change's claims contradict.\n- **Vouch-side false proofs**: `_sole_module_level_defs` covers import-as, star (empties everything), all Store/Del shapes, walrus in defaults/annotations/return/bases/keywords/lambda defaults, match captures incl. mapping-rest, second defs, `global`/`nonlocal` at any depth. Parameter names (`*keep`) and class-body assignments/methods correctly do *not* bind module scope. Parser limits (MAXINDENT=100, bracket nesting) bound `visit` recursion below Python's limit, so no reachable RecursionError. Parse-failure target \u2192 `set()` \u2192 no vouch (fail-closed).\n- **`_SourceResolver`**: vouch is positive-proof only (root-rooted, tracked, unstaged, unique suffix across tracked\u222astaged\u222auntracked, no worktree competitor at root/bystander dir, index-blob defs). \"Not found \u2192 external\" cannot happen. Index-frozen under `_REVIEW_BASE`/`GIT_INDEX_FILE` (the `HEAD:` rewrite in `_run_git` doesn't touch `\":path\"` shows). Worktree-vs-index divergence of the target is irrelevant: any runtime resolution other than the deleted module makes the binding not-the-removed-symbol. Namespace-package deletion (`__init__` gone, subpackage survives) resolves correctly. Leading-slash suffix matching prevents partial-segment false matches; Windows case handling and the root/hyphenated-dir cases are pinned by checks 47/49.\n- **`_from_staged`** covers ancestor packages of staged modules via the `m + \".\"` prefix test; imports from any staged module refuse.\n\n**docscan single-char rule**: a one-character quoted \"value\" can never be evidence of a real credential; the rule is per-token (a later value-shaped token still returns False, verified against `k7`/`kQ`/`k7Qz`/`\"k7\"` pins), cannot suppress a HARD pattern-literal refusal, and only weakens the semantic-layer withdrawal. Sound.\n\n**Selftest sequencing**: traced the fixture state through checks 43\u201354 (HEAD blobs of `lib.py` = keep+filler, the `bare.py` carry-over from check 44 is tolerated by every later assertion, `_delete_lib_with_its_real_callers` correctly removes/re-points all real `keep` callers, staged files excluded from the bystander scan). All new checks are consistent with the implementation.\n\nVersion bumps (marketplace 0.3.3 / plugin 0.3.3) are consistent; enforcement surfaces (.githooks, workflows) untouched by this diff.\n\nNo real defect found that the change introduces or enables.\n\nVERDICT: CLEAR"
+ }
+}
