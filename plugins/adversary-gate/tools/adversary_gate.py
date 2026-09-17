@@ -85,8 +85,17 @@ XAI_API_URL = "https://api.x.ai/v1/responses"   # xAI-native backup (grok); diff
 # grok-4.6 (xAI-native - an `xai:` prefix routes a chain entry to api.x.ai, NOT OpenRouter)
 # takes the SECOND/backup spot, replacing deepseek-v4-flash (which emptied on heavy
 # payloads); its strength backstops glm on the payloads that exhaust a flash model.
-DEFAULT_MODEL = os.environ.get(
-    "ADVERSARY_MODEL", "z-ai/glm-5.3-flash,xai:grok-4.6")
+# Owner ruling 2026-09-16 (31 live runs of this gate's own PROMPT against planted defects,
+# fleet docs/design/2026-09-16-provider-pins.md): deepseek-v4-flash RETURNS as the middle
+# entry, PINNED to the two OpenRouter endpoints that completed every run - the 2026-09-03
+# emptying was one provider's behaviour (DeepInfra served it with no reasoning and missed a
+# planted defect). A chain entry `model@tag1+tag2` pins provider.order to those endpoint
+# tags, in that order, with fallbacks OFF; an entry whose pinned endpoints are all down
+# gets an error payload, which advances the chain like any transport failure. glm stays
+# primary and unpinned (a 30k-reasoning-token review needs its fast providers); grok is the
+# last chance. ADVERSARY_MODEL / --model still override the whole chain.
+DEFAULT_CHAIN = "z-ai/glm-5.3-flash,deepseek/deepseek-v4-flash@open-inference/fp8+gmicloud/fp8,xai:grok-4.6"
+DEFAULT_MODEL = os.environ.get("ADVERSARY_MODEL", DEFAULT_CHAIN)
 MAX_FILE_BYTES = 250_000          # per staged file included in full
 MAX_TOTAL_BYTES = 900_000         # whole prompt budget (hy3 ctx 262k tokens)
 
@@ -836,7 +845,13 @@ def cmd_check(auto_review=False):
 
 
 def _call_model(model, user_content, timeout=1200):
-    """`model` may be a comma-separated fallback chain; returns (text, usage, model_used)."""
+    """`model` may be a comma-separated fallback chain; returns (text, usage, model_used). The serving provider is
+    on _call_model_ex; this three-tuple shape is what reviewed_write.py and callmodel_selftest.py consume."""
+    return _call_model_ex(model, user_content, timeout)[:3]
+
+
+def _call_model_ex(model, user_content, timeout=1200):
+    """As _call_model, plus the serving provider: (text, usage, model_used, provider)."""
     chain = [m.strip() for m in model.split(",") if m.strip()]
     if not chain:
         # reachable via --model "" or ADVERSARY_MODEL="" (adversary finding, chain review
@@ -845,7 +860,7 @@ def _call_model(model, user_content, timeout=1200):
                          "- the gate cannot run.")
     for i, m in enumerate(chain):
         try:
-            text, usage = _call_one_model(m, user_content, timeout)
+            text, usage, provider = _call_one_model(m, user_content, timeout)
         except SystemExit as e:
             if i + 1 < len(chain):
                 sys.stderr.write("adversary model %s failed (%s) - falling back to %s\n"
@@ -857,22 +872,37 @@ def _call_model(model, user_content, timeout=1200):
             # budget on reasoning tokens and emitting nothing). Advancing the chain keeps
             # the EV-004 guarantee intact: an empty response can still never CLEAR - if the
             # LAST model is empty too, cmd_run's fail-closed BLOCK takes it as before.
-            sys.stderr.write("adversary model %s returned no content - falling back to %s\n"
-                             % (m, chain[i + 1]))
+            sys.stderr.write("adversary model %s (provider %s) returned no content - falling back to %s\n"
+                             % (m, provider, chain[i + 1]))
             continue
-        return text, usage, m
+        return text, usage, m, provider
 
 
-def _call_one_model(model, user_content, timeout=1200):
+def _split_entry(entry):
+    """One chain entry -> (model, provider order). `model@tag1+tag2` pins the OpenRouter endpoints
+    that may serve the call, in that order, fallbacks off (owner ruling 2026-09-16); a bare entry
+    pins nothing. An empty pin (`model@`) fails closed: never sent as an empty order."""
+    model, at, pins = entry.partition("@")
+    order = [p.strip() for p in pins.split("+") if p.strip()]
+    if at and not order:
+        raise SystemExit("ADVERSARY GATE: empty provider pin in chain entry %r" % entry)
+    return model.strip(), order
+
+
+def _call_one_model(entry, user_content, timeout=1200):
     fake = os.environ.get("ADVERSARY_FAKE")               # selftests only - no network
     if fake:
         root = os.path.basename(_repo_root())
         if root.startswith("advgate_") and os.environ.get("ADVERSARY_SELFTEST") == "1":
-            return ("(faked verdict for selftest)\nVERDICT: %s" % fake), {}
+            return ("(faked verdict for selftest)\nVERDICT: %s" % fake), {}, "fake"
         sys.stderr.write("ADVERSARY_FAKE ignored outside a selftest repo (adversary "
                          "finding, birth review r2) - running the REAL reviewer.\n")
+    model, order = _split_entry(entry)
     if model.startswith("xai:"):                          # xAI-native backup (grok): a
-        return _call_xai(model[len("xai:"):], user_content, timeout)   # different API + key
+        if order:                                         # different API + key; no provider
+            raise SystemExit("ADVERSARY GATE: provider pins apply to OpenRouter entries only "
+                             "(%r routes to api.x.ai)" % entry)   # routing there - a pin would be a lie
+        return _call_xai(model[len("xai:"):], user_content, timeout)
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not key:
         raise SystemExit("ADVERSARY GATE: OPENROUTER_API_KEY not set - the gate cannot run. "
@@ -880,6 +910,8 @@ def _call_one_model(model, user_content, timeout=1200):
     body = {"model": model, "temperature": 0.2,
             "messages": [{"role": "system", "content": PROMPT},
                          {"role": "user", "content": user_content}]}
+    if order:
+        body["provider"] = {"order": order, "allow_fallbacks": False}
     req = urllib.request.Request(
         API_URL, data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json", "Authorization": "Bearer " + key,
@@ -917,10 +949,27 @@ def _call_one_model(model, user_content, timeout=1200):
             # above (it subclasses OSError) so its 429 retry is unaffected.
             raise SystemExit("ADVERSARY GATE: network/read error reaching OpenRouter: %r"
                              % (getattr(e, "reason", e),))
+    return _parse_completion(d)
+
+
+def _parse_completion(d):
+    """An OpenRouter chat completion -> (text, usage, provider). `provider` is the serving provider OpenRouter names
+    in the response: twelve serve glm-5.3-flash and behave differently (the fleet battery found some ignore a reasoning
+    budget), and the gate's empty-content fallbacks were never traceable to one - the review header records it now
+    (owner order 2026-09-16). A response that names none records None; an error payload still fails closed."""
+    if not isinstance(d, dict):
+        raise SystemExit("ADVERSARY GATE: unreadable model response (not a JSON object)")
     if d.get("error"):
         raise SystemExit("ADVERSARY GATE: model error: %s" % json.dumps(d["error"])[:300])
     text = "".join(ch.get("message", {}).get("content") or "" for ch in (d.get("choices") or []))
-    return text, d.get("usage", {})
+    return text, d.get("usage", {}), d.get("provider")
+
+
+def _review_header(model, usage, provider, scrubbed_count, files):
+    """The first line of every review artifact; `provider:` sits after `model:` so tools that read the model keep
+    working and the provider is one field to the right."""
+    return "model: %s | provider: %s | usage: %s | scrubbed: %d | files: %s\n\n" % (
+        model, provider, usage, scrubbed_count, files)
 
 
 def _read_xai_key():
@@ -983,7 +1032,7 @@ def _call_xai(model, user_content, timeout):
             for v in x:
                 _walk(v)
     _walk(d.get("output", d) if isinstance(d, dict) else d)
-    return "\n".join(texts), (d.get("usage", {}) if isinstance(d, dict) else {})
+    return "\n".join(texts), (d.get("usage", {}) if isinstance(d, dict) else {}), "xai"
 
 
 def _review_head():
@@ -1423,12 +1472,11 @@ def _cmd_run_snapshot(model, context):
                    "value, a test fixture built to that shape, or a false positive. Judge the "
                    "surrounding code as if a value of that shape were there; never treat a "
                    "tag as a missing or malformed value.\n\n" % len(scrubbed)) + payload
-    text, usage, model = _call_model(model, payload)
+    text, usage, model, provider = _call_model_ex(model, payload)
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     art = os.path.join(_adv_dir(root), "reviews", "gate_%s.md" % ts)
     with open(art, "w", encoding="utf-8") as fh:
-        fh.write("model: %s | usage: %s | scrubbed: %d | files: %s\n\n%s"
-                 % (model, usage, len(scrubbed), files, text))
+        fh.write(_review_header(model, usage, provider, len(scrubbed), files) + text)
     lines = text.rstrip().splitlines()
     if not lines:                        # adversary finding (birth review): empty model
         text = "(model returned no content - failing closed)\nVERDICT: BLOCK"   # response must

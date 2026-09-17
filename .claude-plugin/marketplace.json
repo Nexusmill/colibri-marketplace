@@ -10,7 +10,7 @@
       "name": "adversary-gate",
       "source": "./plugins/adversary-gate",
       "description": "A mandatory adversarial commit gate: no code commit without an independent external model's VERDICT CLEAR keyed to the exact staged bytes; durable git-notes evidence on every commit; a push guard that refuses un-evidenced history; CI re-audit. Detection is the guarantee - prevention is not claimed.",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "author": {
         "name": "Nexusmill"
       },

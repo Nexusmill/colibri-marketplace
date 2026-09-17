@@ -36,10 +36,12 @@ commit.
   audit exist precisely because client-side hooks are advisory.
 - **The reviewer costs money — yours.** Reviews run on OpenRouter with YOUR
   `OPENROUTER_API_KEY` (the shipped default chain is GLM-5.3-Flash via OpenRouter,
-  falling back to xAI Grok-4.6 on your `XAI_API_KEY` — the exact ids are the
-  `DEFAULT_MODEL` line in `tools/adversary_gate.py`; override with `--model` or
-  `ADVERSARY_MODEL`). No key, no clearances, no code commits: the gate fails
-  closed by design.
+  then DeepSeek-V4-Flash pinned to two named OpenRouter endpoints, then xAI Grok-4.6
+  on your `XAI_API_KEY` — the exact ids are the `DEFAULT_CHAIN` line in
+  `tools/adversary_gate.py`; override with `--model` or `ADVERSARY_MODEL`). A chain
+  entry `model@tag1+tag2` pins the OpenRouter providers that may serve it, in that
+  order, fallbacks off; every review header records the provider that served it.
+  No key, no clearances, no code commits: the gate fails closed by design.
 - **The OVERRIDE escape belongs to the repo OWNER.** A file `.adversary/OVERRIDE`
   lets exactly one commit through, loudly, and is auditable forever (it becomes a
   provenance-carrying OVERRIDE note). An agent using it is a protocol violation
@@ -92,7 +94,7 @@ troubleshooting chapter where every entry actually happened:
 ## Selftests (no network; the external model is stubbed)
 
 ```
-python <plugin-root>/tools/gate_selftest.py      # 126 checks - gate, notary, push guard, secret floor, removed-symbol refusal
+python <plugin-root>/tools/gate_selftest.py      # 129 checks - gate, notary, push guard, secret floor, removed-symbol refusal, the pinned chain
 python <plugin-root>/tools/install_selftest.py   # 73 checks - installer claims incl. relocation
 python <plugin-root>/tools/audit_selftest.py     # 50 checks - bypass/forgery/override detection
 python <plugin-root>/tools/guard_selftest.py     # 231 checks - the harness deny-guard matrix
@@ -130,7 +132,7 @@ duplicate module name, a re-exporter, or a module the resolver cannot find at al
 ## Provenance
 
 This plugin is a versioned snapshot of the canonical suite in the Nexusmill Tools
-repo at commit `b0de7ab` (2026-09-15). The canonical source of truth remains that
+repo at commit `c15e8ba` (2026-09-16). The canonical source of truth remains that
 repo; the snapshot is updated deliberately, with the same adversarial review this
 tool enforces — every commit of this marketplace passes its own gate.
 

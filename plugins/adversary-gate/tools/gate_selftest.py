@@ -75,6 +75,52 @@ def main():
     check("hook_named_docs_still_not_code", not _g._is_code("docs/pre-commit.md")
           and not _g._is_code("hooks/README"))
 
+    # 0c. the serving PROVIDER is recorded (owner order 2026-09-16): OpenRouter spreads glm-5.3-flash over twelve
+    # providers; the fleet battery proved they behave differently (some ignore a reasoning budget), and the gate's
+    # own empty-content fallbacks to grok have never been traceable to a provider. The completion parser returns it,
+    # the review header carries it, and a response without one records None rather than crashing.
+    try:
+        _ok = (_g._parse_completion({"choices": [{"message": {"content": "VERDICT: CLEAR"}}],
+                                     "usage": {"total_tokens": 7}, "provider": "BaseTen"})
+               == ("VERDICT: CLEAR", {"total_tokens": 7}, "BaseTen"))
+        _ok = _ok and _g._parse_completion({"choices": [{"message": {"content": "x"}}]}) == ("x", {}, None)
+        try:
+            _g._parse_completion({"error": {"message": "boom"}})
+            _ok = False
+        except SystemExit:
+            pass
+    except Exception as _e:  # noqa: BLE001 - a missing helper is a FAIL, not a crashed selftest
+        _ok, _e_detail = False, repr(_e)
+    else:
+        _e_detail = ""
+    check("completion_parser_returns_provider", _ok, _e_detail)
+    # 0d. the default chain (owner ruling 2026-09-16, 31 live runs of this PROMPT against planted defects - fleet
+    # docs/design/2026-09-16-provider-pins.md): glm primary, deepseek-v4-flash the middle entry PINNED to the two
+    # OpenRouter endpoints that completed every run, grok the last chance. The literal default is checked (not
+    # DEFAULT_MODEL, which an ADVERSARY_MODEL in the environment overrides by design).
+    try:
+        _chain = [m.strip() for m in _g.DEFAULT_CHAIN.split(",")]
+        _ok3 = (_chain == ["z-ai/glm-5.3-flash", "deepseek/deepseek-v4-flash@open-inference/fp8+gmicloud/fp8",
+                           "xai:grok-4.6"]
+                and _g._split_entry(_chain[1]) == ("deepseek/deepseek-v4-flash", ["open-inference/fp8", "gmicloud/fp8"])
+                and _g._split_entry("z-ai/glm-5.3-flash") == ("z-ai/glm-5.3-flash", [])
+                and _g._split_entry("xai:grok-4.6") == ("xai:grok-4.6", []))
+    except Exception as _e:  # noqa: BLE001 - a missing constant/helper is a FAIL, not a crashed selftest
+        _ok3, _e3 = False, repr(_e)
+    else:
+        _e3 = ""
+    check("default_chain_glm_pinned_deepseek_grok", _ok3, _e3)
+    try:
+        _hdr = _g._review_header("z-ai/glm-5.3-flash", {"total_tokens": 7}, "BaseTen", 0, ["a.py"])
+        _ok2 = (_hdr.startswith("model: z-ai/glm-5.3-flash | provider: BaseTen | usage: {'total_tokens': 7} | scrubbed: 0"
+                                " | files: ['a.py']") and _hdr.endswith("\n\n"))
+        _ok2 = _ok2 and "| provider: None |" in _g._review_header("m", {}, None, 0, [])
+    except Exception as _e:  # noqa: BLE001
+        _ok2, _e_detail = False, repr(_e)
+    else:
+        _e_detail = ""
+    check("review_header_names_the_provider", _ok2, _e_detail)
+
     # 0b. the DOCS feed must survive colour and external-diff configuration (EV-031, found by the
     # gate reviewing its own distributed copy): with `color.diff=always` git paints ANSI codes on
     # a pipe and no line starts with '+'; with GIT_EXTERNAL_DIFF set git runs the driver instead of
