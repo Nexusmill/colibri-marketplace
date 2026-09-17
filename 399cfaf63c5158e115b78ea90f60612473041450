@@ -1,0 +1,34 @@
+{
+ "type": "CLEAR",
+ "commit": "399cfaf63c5158e115b78ea90f60612473041450",
+ "when": "20260916-231624",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "049a48ec3757d9fcf5eec3c66235d017497cd02710fbc6df58311ec744b8ba34",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260916-231621",
+   "artifact": ".adversary\\reviews\\gate_20260916-231621.md"
+  },
+  "plugins/adversary-gate/.claude-plugin/plugin.json": {
+   "sha": "085b5ea12a747aa9824c31c0f846a8a0e3572dd7dc348af55e72b43a355e6d68",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260916-231621",
+   "artifact": ".adversary\\reviews\\gate_20260916-231621.md"
+  },
+  "plugins/adversary-gate/tools/adversary_gate.py": {
+   "sha": "cf9bf81fb27a42399c152bb46c7207192b11d0302aee233cbd18ccc213d80a9a",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260916-231621",
+   "artifact": ".adversary\\reviews\\gate_20260916-231621.md"
+  },
+  "plugins/adversary-gate/tools/gate_selftest.py": {
+   "sha": "382eee2da82817f181914f0d6a0430b623e4506e3be606ffae00b34d0e92e214",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260916-231621",
+   "artifact": ".adversary\\reviews\\gate_20260916-231621.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260916-231621.md": "model: z-ai/glm-5.3-flash | provider: Parasail | usage: {'prompt_tokens': 58888, 'completion_tokens': 21729, 'total_tokens': 80617, 'cost': 0.0196977, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0196977, 'upstream_inference_prompt_cost': 0.0088332, 'upstream_inference_completions_cost': 0.0108645}, 'completion_tokens_details': {'reasoning_tokens': 20898, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/.claude-plugin/plugin.json', 'plugins/adversary-gate/tools/adversary_gate.py', 'plugins/adversary-gate/tools/gate_selftest.py']\n\nHunt complete. I traced every path the change touches:\n\n**Chain plumbing (`_call_model` \u2192 `_call_model_ex` \u2192 `_call_one_model` \u2192 `_parse_completion`)**\n- `_call_model_ex` cannot return `None` implicitly: on the last chain entry the `continue` branches are unreachable (`i + 1 < len(chain)` is False), so every iteration either returns the 4-tuple or raises. The `[:3]` shim therefore always yields the exact `(text, usage, model_used)` shape the docstring claims `reviewed_write.py`/`callmodel_selftest.py` consume \u2014 no unpack break.\n- All `_call_one_model` return paths produce 3-tuples: the ADVERSARY_FAKE branch (`..., {}, \"fake\"`), the xAI path (`_call_xai` now returns `..., \"xai\"` on every branch, including the non-dict-`d` walk), and the OpenRouter path via `_parse_completion`. The single caller unpacks 3. No stale 2-tuple consumer exists in the staged file.\n- `_parse_completion` is called after the retry loop; every loop exit is either `break` (with `d` bound) or a `raise`, so no unbound-`d` path. The new `isinstance(d, dict)` guard converts a previously crashing AttributeError (non-object JSON) into a fail-closed SystemExit that advances the chain \u2014 strictly safer, matching the existing transport-failure doctrine.\n- `_split_entry` edge cases: `model@` and `model@+` fail closed via SystemExit before any request; bare entries and `xai:` entries produce empty orders; a pin on an `xai:` entry is refused (fail-closed, advances the chain like any entry failure). Pins only ever add `body[\"provider\"]` for OpenRouter entries; bare entries (glm, and any user override) build byte-identical request bodies to before.\n- Failure semantics of a pin are as documented: both pinned endpoints down \u2192 OpenRouter error payload or HTTP error \u2192 SystemExit \u2192 chain advances; `allow_fallbacks: False` cannot silently reroute to the DeepInfra-class provider the ruling excludes. Empty-content fallback (the EV-004 invariant) is untouched: an empty last response still fails closed to BLOCK in `_cmd_run_snapshot`.\n\n**Artifact header:** `_review_header` output is the old line with `provider:` inserted after `model:`; the only in-repo consumer of artifacts (`cmd_record`) embeds raw text without parsing, and the selftest pins the new format. Clearance rows still record the used chain entry in `model` \u2014 same field, same semantics as before.\n\n**Selftest additions:** all three new checks verified against the staged helpers by hand \u2014 `_parse_completion` tuple equality (including the `None`-provider and error-payload SystemExit cases), the `DEFAULT_CHAIN` literal split and `_split_entry` outputs, and the header `startswith`/`endswith`/`\"| provider: None |\"` assertions all hold for the staged implementations. New comment text contains no secret-shaped literals, so the no-self-trip check (23) is unaffected. No `results` key collisions.\n\n**Version bumps:** marketplace.json and plugin.json both 0.3.4, consistent.\n\n**Config/secret surface:** the pin restricts (never expands) which providers receive the payload; no new secret transmission path; no git/index/clearance logic touched, so no new state or ordering surface.\n\nThe only claims I cannot verify from the provided bytes are the OpenRouter endpoint-tag format (`open-inference/fp8`, `gmicloud/fp8`) and the unstaged consumers' exact call shapes \u2014 but both have fail-closed failure modes (400/error payload \u2192 chain advance to grok; the 3-tuple shim preserves the documented contract), and the owner ruling documents 31 live validating runs. Neither is a provable defect.\n\nVERDICT: CLEAR"
+ }
+}
