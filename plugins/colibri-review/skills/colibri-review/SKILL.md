@@ -28,6 +28,18 @@ production.
   paths, `__init__` / `app` / `main` / `core` / `cli` / `server`), deny-list vendored/scratch trees
   (`.git venv node_modules build dist vendor __pycache__ *.min.* site-packages` and any
   scratch/output dirs), skip files > 2 MB.
+- **Tests are units, not filler:** `tests/`, `test_*`, `*_test.*`, `*.test.*`, harness probes and
+  fixtures are review units in their own right — "core-first" is an ORDER, never an exclusion, and
+  errors live in tests too. A test unit's contract source is the code it claims to test: pull that
+  symbol's source into the context pack and audit the assertion against it. Hunt the test-specific
+  classes: assertions that cannot fail (tautologies, a value compared to itself, `assert True`,
+  exceptions swallowed before the assert); a stale or wrong target (regex/path-extracted source, a
+  stub or fixture shadowing the real symbol, a mock that mocks away the behavior under test);
+  runners that report PASS on exception or exit 0 on failure; silent skips masquerading as passes;
+  order or shared-state coupling; fixture and environment leaks (temp dirs, env vars, monkeypatches
+  never restored); hard-coded machine paths; non-deterministic inputs without a seed.
+- **Every code extension counts:** ES-module and typed JavaScript (`.mjs .cjs .mts .cts`) stand on
+  the same footing as `.js`/`.ts`; a scan that skips them is incomplete.
 - **Freshness:** read the CURRENT on-disk file at dispatch time — never a snapshot, never memory of
   an earlier read. Record `sha256` of the exact bytes reviewed.
 - **Cache check — a prior review is CONTEXT, never a skip (all five modes):** if a prior
@@ -213,7 +225,7 @@ five modes, including spec with `--spec` and plan with `--findings`.)
 
 ## Non-negotiables recap
 One file at a time · context pack first · code-intelligence tooling over ad-hoc text search ·
-current bytes + sha recorded · a prior review is CONTEXT, never a skip · three empty model
+tests and every code extension (`.mjs` included) are units · current bytes + sha recorded · a prior review is CONTEXT, never a skip · three empty model
 types = LOCKED until the bytes change (feature never locks) · project records consulted
 before and updated after · five modes — bug / quality /
 feature / spec / plan · every finding CONFIRMED or labeled PLAUSIBLE · spec =
