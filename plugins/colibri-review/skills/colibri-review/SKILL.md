@@ -1,6 +1,6 @@
 ---
 name: colibri-review
-description: A rigorous, context-aware protocol for ALL code review and debugging. Use whenever asked to review code, audit a file, hunt bugs, check code quality, propose features for a module, check code against a spec or stated expectations, plan the remediation of known findings, debug a failure, investigate an error, or fix a reported defect — in any repo, any language. Reviews one file at a time, assembles repo context before judging, and adversarially verifies every finding before it ships. Never review or debug ad hoc: load this skill first and follow it to the letter.
+description: A rigorous, context-aware protocol for ALL code review and debugging. Use whenever asked to review code, audit a file, hunt bugs, check code quality, propose features for a module, check code against a spec or stated expectations, plan the remediation of known findings, debug a failure, investigate an error, or fix a reported defect — in any repo, any language. Reviews one file at a time, assembles repo context before judging, and adversarially verifies every finding before it ships. Ships the scan ladder (owner order 2026-09-19): after a feature run every changed file is bug-scanned by a second model family and any HIGH escalates to a third — context-loaded, new-findings-only. Never review or debug ad hoc: load this skill first and follow it to the letter.
 ---
 
 # Colibri Review — a context-aware code review & debug protocol
@@ -216,10 +216,43 @@ Same laws + the debug ladder, in order, no skipping:
   closing commit goes through it — the gate's findings are review to address, never an obstacle to
   route around (`--no-verify` and plumbing commits are not options).
 
-## External second opinions (demoted, optional)
-A paid external reviewer (another model / API) is permitted ONLY as a second opinion after the
-in-session review exists, sending the CURRENT on-disk bytes, and disclosing the cost BEFORE the
-call. Its findings enter the report only after passing Phase 3 verification. It is never the
+## The scan ladder — standing protocol after feature runs (owner order 2026-09-19)
+
+Gate clearance is DIFF clearance for the staged bytes — it is not a file review.
+After any feature run (a wave whose commits cleared the gate), the ladder fires
+automatically, with no owner reminder:
+
+1. **Rung M2 — every changed file, a DIFFERENT model.** Every source file and
+   every test file the run touched gets a full-file `bug` review by a model
+   family that is NOT the gate chain (gate: glm-5.3-flash → grok-4.6) and not
+   the in-session model. Default M2: hy4-preview (tencent) — disclose the
+   batch cost before the first call.
+2. **Rung M3 — HIGHs escalate to a THIRD model.** Any file where a scan found
+   a HIGH or CRITICAL gets one more full-file pass by a model family distinct
+   from the rung below it, with the prior review(s) loaded as context and the
+   mandate of the cache rule: hunt NEW findings only — restate nothing; a
+   pass that surfaces nothing records `new: 0` honestly.
+3. **Findings are verified before they count** (Phase 3 against current
+   bytes); confirmed defects are remediated and logged in the same session;
+   every ladder pass lands as manifest pass lineage and counts toward the
+   three-model lock like any other pass.
+4. **New test files are first-class ladder members** — the gate takes them on
+   commit (automatic) and the M2 scan takes them after the run; a test file
+   is never "just a test" (see Phase 0).
+
+Routing table (a distinct family at each rung; on unavailability substitute
+the next distinct family — never the same model twice at one rung on one
+file): gate L1 glm-5.3-flash · gate L2 grok-4.6 (diff clearance) · M2
+hy4-preview (file hunt) · M3 grok-4.6 effort high (escalation; its gate role
+was diff clearance — the M3 pass is a context-loaded full-file hunt). The
+in-session model orchestrates the ladder, assembles context packs, and
+verifies findings; it is never the ladder's scanner.
+
+## External second opinions (demoted, optional outside the ladder)
+Outside the scan ladder, a paid external reviewer (another model / API) is permitted ONLY as a
+second opinion after the in-session review exists, sending the CURRENT on-disk bytes, and
+disclosing the cost BEFORE the call. Inside the ladder the external model IS the designated
+scanner by standing order. Its findings enter the report only after passing Phase 3 verification. It is never the
 primary reviewer. (The colibri console and the grok-review / hy4-review headless CLIs speak all
 five modes, including spec with `--spec` and plan with `--findings`.)
 
@@ -231,4 +264,4 @@ before and updated after · five modes — bug / quality /
 feature / spec / plan · every finding CONFIRMED or labeled PLAUSIBLE · spec =
 contract in, divergences only, unjudgeable named, never a self-invented contract · plan =
 test-first and never executed by its author · debug = reproduce → hypothesize → verify → log ·
-commit at close, through any armed gate.
+commit at close, through any armed gate · after a feature run the SCAN LADDER fires — M2 cross-family scan of every changed file (tests included), M3 third-model escalation on any HIGH, every pass context-loaded and new-findings-only.
