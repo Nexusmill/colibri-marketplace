@@ -1,0 +1,58 @@
+{
+ "type": "CLEAR",
+ "commit": "a6e9194ba74d008d2931ba223a3d9ba03816c865",
+ "when": "20260919-092955",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "8df9701c25937c9d2093744cde3a73c6be714b1f43f8748d5475676a0652f661",
+   "model": "xai:grok-4.6",
+   "when": "20260919-092951",
+   "artifact": ".adversary\\reviews\\gate_20260919-092951.md"
+  },
+  "plugins/adversary-gate/.claude-plugin/plugin.json": {
+   "sha": "cb81c930a3305701627065e54834c73a2e0a53f616c3c6298c849e63ac018df4",
+   "model": "xai:grok-4.6",
+   "when": "20260919-092951",
+   "artifact": ".adversary\\reviews\\gate_20260919-092951.md"
+  },
+  "plugins/adversary-gate/tools/adversary_gate.py": {
+   "sha": "cd5bade2e3504c51e8b15b6aec07efc1409fe9654945bf7b4685e5338c1c0ccb",
+   "model": "xai:grok-4.6",
+   "when": "20260919-092951",
+   "artifact": ".adversary\\reviews\\gate_20260919-092951.md"
+  },
+  "plugins/adversary-gate/tools/docscan.py": {
+   "sha": "1d20c93b926088948322f124e1cd7b975a0011923f216d840f2232760726523e",
+   "model": "xai:grok-4.6",
+   "when": "20260919-092951",
+   "artifact": ".adversary\\reviews\\gate_20260919-092951.md"
+  },
+  "plugins/adversary-gate/tools/docscan_selftest.py": {
+   "sha": "8a61cf0cd18cb37849fec895c11f6ca9dd96a47069117676d26d90fffd0e601e",
+   "model": "xai:grok-4.6",
+   "when": "20260919-092951",
+   "artifact": ".adversary\\reviews\\gate_20260919-092951.md"
+  },
+  "plugins/adversary-gate/tools/gate_selftest.py": {
+   "sha": "846c56296be5d46d44c4ec3ef88337b51d862ca503e01a06e9803ff079e77d98",
+   "model": "xai:grok-4.6",
+   "when": "20260919-092951",
+   "artifact": ".adversary\\reviews\\gate_20260919-092951.md"
+  },
+  "plugins/adversary-gate/tools/install_gate.py": {
+   "sha": "6ee92257f4e2b7bc9b92fa402b253961c1c4eadf01320160d89c81f062d9cc47",
+   "model": "xai:grok-4.6",
+   "when": "20260919-092951",
+   "artifact": ".adversary\\reviews\\gate_20260919-092951.md"
+  },
+  "plugins/adversary-gate/tools/install_selftest.py": {
+   "sha": "31fca345f4269310c196b8231cf9b436cef82adc9ac5b2eaa89daf48e5073935",
+   "model": "xai:grok-4.6",
+   "when": "20260919-092951",
+   "artifact": ".adversary\\reviews\\gate_20260919-092951.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260919-092951.md": "model: xai:grok-4.6 | provider: xai | usage: {'input_tokens': 110363, 'input_tokens_details': {'cached_tokens': 512}, 'output_tokens': 28864, 'output_tokens_details': {'reasoning_tokens': 28860}, 'total_tokens': 139227, 'num_sources_used': 0, 'num_server_side_tools_used': 0, 'cost_in_usd_ticks': 3931420000, 'context_details': {'input_tokens': 110363, 'output_tokens': 28871}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/.claude-plugin/plugin.json', 'plugins/adversary-gate/tools/adversary_gate.py', 'plugins/adversary-gate/tools/docscan.py', 'plugins/adversary-gate/tools/docscan_selftest.py', 'plugins/adversary-gate/tools/gate_selftest.py', 'plugins/adversary-gate/tools/install_gate.py', 'plugins/adversary-gate/tools/install_selftest.py']\n\nVERDICT: CLEAR"
+ }
+}
