@@ -288,7 +288,8 @@ def _assess(root, canon, canon_post, canon_prepush, canon_aud):
     # baseline is unarmed even before the first commit
     base_ok = os.path.isfile(base_path)
     _, rref, _ = _git(root, "config", "notes.rewriteRef")
-    rref_ok = rref == NOTES_REF
+    _, rmode, _ = _git(root, "config", "notes.rewriteMode")
+    rref_ok = rref == NOTES_REF and rmode == "ignore"   # a concatenating rebase corrupts notes: stale
     layer3 = (post_state == "canonical" and prepush_state == "canonical"
               and aud_state == "canonical" and base_ok and rref_ok)
     dangling = _dangling(eff, root)
@@ -318,7 +319,7 @@ def _assess(root, canon, canon_post, canon_prepush, canon_aud):
         state = "stale"
     return {"hp": hp, "gv": gv, "eff": eff, "shim_state": shim_state, "post_state": post_state,
             "prepush_state": prepush_state, "aud_state": aud_state, "base_ok": base_ok,
-            "rref": rref, "rref_ok": rref_ok, "layer3": layer3, "dangling": dangling,
+            "rref": rref, "rmode": rmode, "rref_ok": rref_ok, "layer3": layer3, "dangling": dangling,
             "vendored_absent": vendored_absent, "hook_layer": hook_layer, "armed": armed,
             "dispatchers": disp, "state": state}
 
@@ -546,8 +547,8 @@ def main(argv=None):
                   "or re-run the installer on this branch and commit .githooks/")
         if s["state"] == "stale":
             print("  STALE          : the hook layer is armed but the vendored .githooks/ bytes, "
-                  "baseline or rewriteRef are not canonical - re-run the installer and commit "
-                  ".githooks/")
+                  "baseline, rewriteRef or rewriteMode are not canonical - re-run the installer "
+                  "and commit .githooks/")
         print("  shim           : %s" % s["shim_state"])
         print("  gate tool      : %s" % ("present at " + gate_path if gate_ok else
                                          "MISSING at %s (hook fails CLOSED - no commit "
@@ -558,6 +559,8 @@ def main(argv=None):
         print("  baseline       : %s" % ("present" if s["base_ok"] else "ABSENT (tripwire "
                                          "cannot anchor - re-run the installer)"))
         print("  rewriteRef     : %s" % (s["rref"] or "(unset - rebases will orphan notes)"))
+        print("  rewriteMode    : %s" % (s["rmode"] or "(unset - git concatenates a copied note onto the "
+                                                         "notary's fresh one on rebase; re-run the installer)"))
         print("  epoch          : %s" % {
             "none": "(none - the hook-name rule applies to every commit)",
             "uncommitted": "uncommitted (written by the installer, not yet in HEAD's tree) - the "
@@ -677,6 +680,17 @@ def main(argv=None):
     if rc != 0:
         print("FAIL: could not set notes.rewriteRef (%s)" % err[:200])
         return 1
+    # ...and carry them by IGNORE: git's default rewriteMode is CONCATENATE, which glued the
+    # copied original note onto the fresh note the post-commit notary had written during a rebase
+    # replay - two JSON documents in one note, 'note is not valid JSON' at the auditor (Nexusmill
+    # PR #21 rebase, 2026-09-17). `ignore` keeps whatever note the rewritten commit already has:
+    # the notary's fresh note when it fired (the only record of content the gate cleared AFTER a
+    # squash, an edit or a content-changing amend - `overwrite` would destroy it, gate round 1
+    # on this fix), else the copied original, the valid record of blob-identical replays.
+    rc, _, err = _git(root, "config", "notes.rewriteMode", "ignore")
+    if rc != 0:
+        print("FAIL: could not set notes.rewriteMode (%s)" % err[:200])
+        return 1
     # transient gate state (.adversary/: clearances + review artifacts) must never be
     # committed - same convention as the repos already armed by hand
     gi = os.path.join(root, ".gitignore")
@@ -698,12 +712,13 @@ def main(argv=None):
     prepush_state = _bytes_state(root, "pre-push", canon_prepush)
     aud_state = _bytes_state(root, "adversary_audit.py", canon_aud)
     _, rref, _ = _git(root, "config", "notes.rewriteRef")
+    _, rmode, _ = _git(root, "config", "notes.rewriteMode")
     if (not _hooks_equivalent(hp, root) or shim_state != "canonical"
             or post_state != "canonical" or prepush_state != "canonical"
-            or aud_state != "canonical" or rref != NOTES_REF):
+            or aud_state != "canonical" or rref != NOTES_REF or rmode != "ignore"):
         print("FAIL: post-install verification (hooksPath=%r shim=%s post=%s prepush=%s "
-              "auditor=%s rewriteRef=%r)" % (hp, shim_state, post_state, prepush_state,
-                                             aud_state, rref))
+              "auditor=%s rewriteRef=%r rewriteMode=%r)" % (hp, shim_state, post_state, prepush_state,
+                                                            aud_state, rref, rmode))
         return 1
     if not gate_ok:
         _warn("the gate tool the SHIM execs is missing on this machine (%s) - the hook "
@@ -717,7 +732,7 @@ def main(argv=None):
                       root))
     print("  core.hooksPath = %s (machine-wide canonical dir; .githooks/ vendored for CI + "
           "other machines) ; shims + vendored auditor = canonical bytes (LF, pinned by "
-          ".githooks/.gitattributes) ; notes.rewriteRef = %s ; gate tool %s"
+          ".githooks/.gitattributes) ; notes.rewriteRef = %s (rewriteMode ignore) ; gate tool %s"
           % (CANON_HOOKS_DIR, NOTES_REF, "present" if gate_ok else "MISSING"))
     print("NEXT (the arming commit proves the hooks end to end):")
     print("  1. git add .githooks .gitignore")

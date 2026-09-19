@@ -291,6 +291,14 @@ def _evidence_is_name(reason):
         low_whole = bare.lower()[:-2] if bare.lower().endswith("'s") else bare.lower()
         if low_whole in _DESCRIPTIVE:
             continue
+        if re.fullmatch(r"[+-]?[0-9]{1,6}\.[0-9]{1,6}", bare):
+            # a decimal FLOAT literal (a timeout of 30.0, a price of 0.02) is a quantity, never a credential
+            # (push-guard pre-test 2026-09-16 on the model-pins feed: a reviewer response quoting a code
+            # fixture's `timeout_s: float = 30.0` drew `30.0` as the value 3/3). Digits.digits ONLY, at most
+            # six each side; an integer (a PIN), a dotted triple and anything glued to letters keep their
+            # value status below.
+            named = True
+            continue
         if len(bare) == 1 and bare.isalnum():
             # a ONE-CHARACTER literal is never a credential (push-guard catch 2026-09-15 on the fleet
             # probe push: a plan document's embedded test code `setenv("XAI_API_KEY", "k")` was

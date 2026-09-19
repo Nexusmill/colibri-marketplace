@@ -132,7 +132,7 @@ duplicate module name, a re-exporter, or a module the resolver cannot find at al
 ## Provenance
 
 This plugin is a versioned snapshot of the canonical suite in the Nexusmill Tools
-repo at commit `c15e8ba` (2026-09-16). The canonical source of truth remains that
+repo at commit `dbbc1e3` (2026-09-19; the adversary-gate suite last changed in e51909c). The canonical source of truth remains that
 repo; the snapshot is updated deliberately, with the same adversarial review this
 tool enforces — every commit of this marketplace passes its own gate.
 
