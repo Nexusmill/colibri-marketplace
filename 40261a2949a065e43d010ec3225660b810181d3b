@@ -1,0 +1,22 @@
+{
+ "type": "CLEAR",
+ "commit": "40261a2949a065e43d010ec3225660b810181d3b",
+ "when": "20260919-083725",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "73e1f2664f8bc2fabeb09b3c2bfaa8646a3b1d70328221c3a724c8fcf7f5776d",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260919-083722",
+   "artifact": ".adversary\\reviews\\gate_20260919-083722.md"
+  },
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "27eb5e6c37f84151439693b656dd5def093a5e753c66d2b906dfdeb734517ae8",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260919-083722",
+   "artifact": ".adversary\\reviews\\gate_20260919-083722.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260919-083722.md": "model: z-ai/glm-5.3-flash | provider: CoreWeave | usage: {'prompt_tokens': 1583, 'completion_tokens': 2069, 'total_tokens': 3652, 'cost': 0.00127195, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.00127195, 'upstream_inference_prompt_cost': 0.00023745, 'upstream_inference_completions_cost': 0.0010345}, 'completion_tokens_details': {'reasoning_tokens': 1638, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/colibri-review/.claude-plugin/plugin.json']\n\nAdversarial review of a metadata-only change (version bump + description extension for `colibri-review` in two JSON manifests).\n\nChecks performed against the provided bytes:\n\n1. **JSON validity** \u2014 Both full staged files parse cleanly; no trailing commas, unescaped characters. The em-dash (`\u2014`), `&`, `;`, and `+` in the new description text are all legal inside JSON strings.\n2. **Cross-file consistency** \u2014 `marketplace.json` entry and `plugins/colibri-review/.claude-plugin/plugin.json` now carry the *identical* version (`0.3.0`) and byte-identical description strings. No drift introduced between marketplace declaration and plugin manifest. Name (`colibri-review`) and source path (`./plugins/colibri-review`) still match the plugin's actual location (`plugins/colibri-review/.claude-plugin/plugin.json`).\n3. **Diff scope** \u2014 Only `description` and `version` lines change in both files; `keywords`, `author`, `license`, `source`, and the `adversary-gate` entry are untouched. No callers, scripts, hooks, or `.colibri_reviews` manifest rows are affected \u2014 nothing here can break a call site or a keyed record.\n4. **Version semantics** \u2014 0.2.2 \u2192 0.3.0 is a coherent minor bump for a feature-addition description; it does not collide with the independently versioned `adversary-gate` (0.3.4).\n5. **Description claims** \u2014 The appended text (\"Prior reviews load as context\u2026 three empty model types lock a file+mode until its bytes change\") describes plugin behavior whose implementation is not part of this staged diff. No functional file is staged, so the claim is either already satisfied by previously committed plugin content or is documentation-only; nothing in the provided bytes contradicts it, and no defect is introduced or enabled by the string itself. Not block-worthy on speculation.\n\nNo logic errors, no broken consumers, no contract breaks with the surrounding visible code.\n\nVERDICT: CLEAR"
+ }
+}
