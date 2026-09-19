@@ -154,6 +154,80 @@ def main():
     check("clearance_obtainable", r.returncode == 0, (r.stdout + r.stderr)[-150:])
     r = git(tmp, "commit", "-m", "now allowed", expect_ok=False)
     check("installed_hook_allows_after_clear", r.returncode == 0, (r.stderr + r.stdout)[:150])
+    # 2026-09-17 (Nexusmill PR #21 rebase): git's default notes.rewriteMode is CONCATENATE - the rebase copied the
+    # original commit's note onto the replayed commit AFTER the post-commit notary had written a fresh one, gluing
+    # two JSON documents into one note ('note is not valid JSON' at the auditor). The installer pins IGNORE, not
+    # overwrite (gate round 1 on the fix): when the notary fired on the rewritten commit its fresh note is the ONLY
+    # record of the content the gate cleared post-rewrite (a squash, an edit, a content-changing amend), and the copy
+    # must not replace it; when the notary was silent the original note is still copied. Read HERE, before the
+    # replay block below sets the key by hand (gate round 3): this row sees the INSTALLER's value only.
+    rmode = git(tmp, "config", "notes.rewriteMode", expect_ok=False).stdout.strip()  # unset = exit 1
+    check("rewritemode_ignore", rmode == "ignore", rmode)
+
+    # 4b. the incident end to end (2026-09-17; gate rounds 1-2 on this fix): the shape is a REBASE REPLAY of a
+    # notarized commit whose clearance is still fresh - the notary fires inside the replayed commit, then the
+    # sequencer's rewrite step copies the ORIGINAL commit's note onto the same commit. Under git's default
+    # (concatenate) that glues two JSON documents into one note and the auditor rejects it; the installer's pin
+    # (ignore) keeps the notary's fresh note. Both halves are proven: the incident reproduced under the default,
+    # then prevented under the pin. Every git call here is GATED (the selftest knob keeps the fixture skip off).
+    import hashlib
+    import json
+    gated = dict(os.environ, ADVERSARY_MODEL="", ADVERSARY_SELFTEST="1", ADVERSARY_FAKE="CLEAR", DOCSCAN_FAKE="CLEAR")
+
+    def gitg(*args):
+        return subprocess.run([GIT, "-C", tmp] + list(args), capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", env=gated)
+
+    def head_note():
+        return git(tmp, "notes", "--ref", "refs/notes/adversary", "show", "HEAD", expect_ok=False).stdout
+
+    base = git(tmp, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    base_tip = git(tmp, "rev-parse", "HEAD").stdout.strip()
+    gitg("checkout", "-q", "-b", "replay")
+    open(os.path.join(tmp, "mod2.py"), "w").write("def g():\n    return 2\n")
+    git(tmp, "add", "mod2.py")
+    run([GATE, "run"], cwd=tmp, env_extra={"ADVERSARY_FAKE": "CLEAR"})           # the clearance the replay will still find
+    r = gitg("commit", "-q", "-m", "replayed later")
+    check("replay_fixture_notarized", r.returncode == 0 and "CLEAR note written" in (r.stdout + r.stderr),
+          (r.stdout + r.stderr)[-200:])
+    mod2_sha = hashlib.sha256(open(os.path.join(tmp, "mod2.py"), "rb").read()).hexdigest()
+
+    def move_base(name):
+        gitg("checkout", "-q", base)
+        open(os.path.join(tmp, name), "w").write("the base moves\n")
+        git(tmp, "add", name)
+        r = gitg("commit", "-q", "-m", "base moves")
+        gitg("checkout", "-q", "replay")
+        return r.returncode == 0
+
+    # half 1 - git's default, the incident: two JSON documents in one note
+    git(tmp, "config", "notes.rewriteMode", "concatenate")
+    ok_base = move_base("a.md")
+    r = gitg("rebase", "-q", base)
+    note = head_note()
+    try:
+        json.loads(note)
+        glued = False
+    except ValueError:
+        glued = True
+    check("incident_reproduces_under_git_default", ok_base and r.returncode == 0 and glued
+          and note.count('"type"') == 2, (r.stderr[-160:] if r.returncode else note[:160]))
+    # half 2 - the installer's pin: the replayed HEAD carries ONE valid note naming mod2's blob
+    git(tmp, "config", "notes.rewriteMode", "ignore")
+    ok_base = move_base("b.md")
+    r = gitg("rebase", "-q", base)
+    note = head_note()
+    try:
+        doc = json.loads(note)
+        ok = (doc.get("type") == "CLEAR" and doc.get("files", {}).get("mod2.py", {}).get("sha") == mod2_sha
+              and note.count('"type"') == 1)
+    except ValueError:
+        ok = False
+    check("pin_keeps_one_valid_note_on_replay", ok_base and r.returncode == 0 and ok,
+          (r.stderr[-160:] if r.returncode else note[:160]))
+    gitg("checkout", "-q", base)                       # hand the repo back as found: the rows below expect the
+    git(tmp, "reset", "-q", "--hard", base_tip)        # cleared commit at HEAD and no replay branch
+    git(tmp, "branch", "-q", "-D", "replay")
 
     # 4a. LAYER 3 claims: post-commit shim + vendored auditor + rewriteRef + baseline
     canon_post = canon_shim("post-commit")

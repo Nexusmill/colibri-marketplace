@@ -30,6 +30,8 @@ Key: OPENROUTER_API_KEY env (never printed). Artifacts land in .adversary/review
 directory is gitignored - transient gate state, not history; durable verdicts still go to
 the repo's review archives by the normal protocol).
 """
+# 2026-09-16: incomplete reviews advance the configured chain; one strict final verdict
+# governs both commit and pre-write authorization. BLOCK/conflicts never shop for CLEAR.
 import argparse
 import ast
 import datetime
@@ -844,38 +846,84 @@ def cmd_check(auto_review=False):
     return 1
 
 
-def _call_model(model, user_content, timeout=1200):
-    """`model` may be a comma-separated fallback chain; returns (text, usage, model_used). The serving provider is
-    on _call_model_ex; this three-tuple shape is what reviewed_write.py and callmodel_selftest.py consume."""
-    return _call_model_ex(model, user_content, timeout)[:3]
+def _review_outcome(text):
+    """Only a single, final, exact verdict can authorize; conflicts are terminal."""
+    lines = [line.strip().upper() for line in text.rstrip().splitlines()]
+    markers = [line for line in lines if re.match(r"VERDICT\s*:", line)]
+    if not markers:
+        return "incomplete"
+    final = lines[-1]
+    if len(markers) == 1 and final in {"VERDICT: CLEAR", "VERDICT: BLOCK"}:
+        return final.split(": ")[1]
+    return "malformed"
 
 
-def _call_model_ex(model, user_content, timeout=1200):
-    """As _call_model, plus the serving provider: (text, usage, model_used, provider)."""
+class IncompleteReviewResponse(SystemExit):
+    """Provider completion metadata says the response is not a finished review."""
+    def __init__(self, text, provider):
+        super().__init__("Independent review response incomplete")
+        self.text = text
+        self.provider = provider
+
+
+def _completion_guard(text, unfinished, provider):
+    # Even a provider-truncated BLOCK is not a reason to shop for CLEAR.
+    if unfinished and _review_outcome(text) not in {"BLOCK", "malformed"}:
+        raise IncompleteReviewResponse(text, provider)
+
+
+def _review_attempt(attempts, model, provider, outcome, text=None, error=None):
+    def label(value):
+        return _scrub_text(str(value))[0][:160] if value is not None else None
+    record = {"model": label(model), "provider": label(provider), "outcome": outcome}
+    if text is not None:
+        raw = text.encode("utf-8", "surrogatepass")
+        record.update(response_sha256=hashlib.sha256(raw).hexdigest(), response_bytes=len(raw))
+    if error is not None:
+        record["error_type"] = type(error).__name__  # never echo provider bodies/credentials
+        message = str(error)
+        status = re.search(r"HTTP (\d{3})\b", message)
+        if status:
+            record.update(failure_kind="http", http_status=int(status[1]))
+        elif "network/read error" in message:
+            record["failure_kind"] = "transport"
+        elif "not set" in message or "key unavailable" in message:
+            record["failure_kind"] = "credentials"
+        elif "unreadable" in message or "invalid" in message:
+            record["failure_kind"] = "parse"
+        else:
+            record["failure_kind"] = "provider_or_configuration"
+    attempts.append(record)
+    sys.stderr.write("adversary review attempt: " + json.dumps(record) + "\n")
+
+
+def _call_model(model, user_content, timeout=1200, *, attempts=None):
+    """Compatibility API: (text, usage, model_used); optional caller-owned attempt log."""
+    return _call_model_ex(model, user_content, timeout, attempts=attempts)[:3]
+
+
+def _call_model_ex(model, user_content, timeout=1200, *, attempts=None):
+    """Return (text, usage, model_used, provider); incomplete reviews advance the chain."""
     chain = [m.strip() for m in model.split(",") if m.strip()]
     if not chain:
-        # reachable via --model "" or ADVERSARY_MODEL="" (adversary finding, chain review
-        # r1: the "unreachable" claim here was wrong) - fail closed with a clean error.
-        raise SystemExit("ADVERSARY GATE: no model given (empty --model / ADVERSARY_MODEL) "
-                         "- the gate cannot run.")
-    for i, m in enumerate(chain):
+        raise SystemExit("ADVERSARY GATE: no model given (empty --model / ADVERSARY_MODEL)")
+    history = attempts if attempts is not None else []
+    for m in chain:
         try:
             text, usage, provider = _call_one_model(m, user_content, timeout)
-        except SystemExit as e:
-            if i + 1 < len(chain):
-                sys.stderr.write("adversary model %s failed (%s) - falling back to %s\n"
-                                 % (m, str(e)[:160], chain[i + 1]))
-                continue
-            raise
-        if not text.strip() and i + 1 < len(chain):
-            # Empty content = no verdict (seen live: deepseek burning its whole completion
-            # budget on reasoning tokens and emitting nothing). Advancing the chain keeps
-            # the EV-004 guarantee intact: an empty response can still never CLEAR - if the
-            # LAST model is empty too, cmd_run's fail-closed BLOCK takes it as before.
-            sys.stderr.write("adversary model %s (provider %s) returned no content - falling back to %s\n"
-                             % (m, provider, chain[i + 1]))
+        except IncompleteReviewResponse as exc:
+            _review_attempt(history, m, exc.provider, "incomplete", text=exc.text)
             continue
+        except SystemExit as exc:
+            _review_attempt(history, m, None, "provider_error", error=exc)
+            continue
+        outcome = _review_outcome(text)
+        _review_attempt(history, m, provider, outcome, text=text)
+        if outcome == "incomplete":
+            continue
+        # CLEAR, BLOCK, or malformed/conflicting verdict: terminal, never verdict shopping.
         return text, usage, m, provider
+    raise SystemExit("ADVERSARY GATE: configured reviewers exhausted without a complete verdict")
 
 
 def _split_entry(entry):
@@ -953,15 +1001,26 @@ def _call_one_model(entry, user_content, timeout=1200):
 
 
 def _parse_completion(d):
-    """An OpenRouter chat completion -> (text, usage, provider). `provider` is the serving provider OpenRouter names
-    in the response: twelve serve glm-5.3-flash and behave differently (the fleet battery found some ignore a reasoning
-    budget), and the gate's empty-content fallbacks were never traceable to one - the review header records it now
-    (owner order 2026-09-16). A response that names none records None; an error payload still fails closed."""
-    if not isinstance(d, dict):
-        raise SystemExit("ADVERSARY GATE: unreadable model response (not a JSON object)")
-    if d.get("error"):
-        raise SystemExit("ADVERSARY GATE: model error: %s" % json.dumps(d["error"])[:300])
-    text = "".join(ch.get("message", {}).get("content") or "" for ch in (d.get("choices") or []))
+    """Parse one OpenRouter completion, preserving usage/provider and completion state."""
+    if not isinstance(d, dict) or d.get("error"):
+        raise SystemExit("ADVERSARY GATE: invalid/provider-error model response")
+    choices = d.get("choices") or []
+    if not isinstance(choices, list):
+        raise SystemExit("ADVERSARY GATE: invalid completion choices")
+    texts = []
+    unfinished = len(choices) > 1  # alternatives must not be concatenated into one verdict
+    for choice in choices:
+        if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
+            raise SystemExit("ADVERSARY GATE: invalid completion message")
+        message = choice["message"]
+        content = message.get("content") or ""
+        if not isinstance(content, str):
+            raise SystemExit("ADVERSARY GATE: invalid completion content")
+        texts.append(content)
+        unfinished |= (choice.get("finish_reason") not in (None, "stop")
+                       or bool(message.get("tool_calls")) or bool(message.get("function_call")))
+    text = "\n".join(texts)
+    _completion_guard(text, unfinished, d.get("provider"))
     return text, d.get("usage", {}), d.get("provider")
 
 
@@ -1021,9 +1080,13 @@ def _call_xai(model, user_content, timeout):
     if isinstance(d, dict) and d.get("error"):
         raise SystemExit("ADVERSARY GATE: xAI model error: %s" % json.dumps(d["error"])[:300])
     texts = []
+    unfinished = not isinstance(d, dict) or d.get("status") not in (None, "completed")
 
     def _walk(x):
+        nonlocal unfinished
         if isinstance(x, dict):
+            if str(x.get("type", "")).endswith("_call") or x.get("status") not in (None, "completed"):
+                unfinished = True
             if x.get("type") == "output_text" and isinstance(x.get("text"), str):
                 texts.append(x["text"])
             for v in x.values():
@@ -1032,7 +1095,9 @@ def _call_xai(model, user_content, timeout):
             for v in x:
                 _walk(v)
     _walk(d.get("output", d) if isinstance(d, dict) else d)
-    return "\n".join(texts), (d.get("usage", {}) if isinstance(d, dict) else {}), "xai"
+    text = "\n".join(texts)
+    _completion_guard(text, unfinished, "xai")
+    return text, (d.get("usage", {}) if isinstance(d, dict) else {}), "xai"
 
 
 def _review_head():
@@ -1481,7 +1546,7 @@ def _cmd_run_snapshot(model, context):
     if not lines:                        # adversary finding (birth review): empty model
         text = "(model returned no content - failing closed)\nVERDICT: BLOCK"   # response must
         lines = text.splitlines()        # BLOCK cleanly, never IndexError
-    verdict = "CLEAR" if lines[-1].strip().upper() == "VERDICT: CLEAR" else "BLOCK"
+    verdict = "CLEAR" if _review_outcome(text) == "CLEAR" else "BLOCK"
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
@@ -1571,6 +1636,21 @@ def _unquote_c(s):
     return s
 
 
+def _blob_is_binary(rev, path):
+    """A NUL in the first 8 KB of the blob at rev:path - the staged docs scanner's rule
+    (_staged_doc_files), applied to the push audit's DOCS FEED only. `--text` forces a diff of a
+    binary, and its NUL-free lines (a PNG's deflate stream: 28,881 of them from one 2 MB brand
+    image, whose push the docs model then refused as secret-shaped garbage, 2026-09-17) are not
+    documentation; the pattern floor still scans every one of them (gate round on this fix:
+    a literal planted inside a binary asset must refuse the push - the floor is the barrier).
+    A path git cannot show (renamed away, absent) is not binary - it has no blob."""
+    try:
+        blob = _run_git(["show", "%s:%s" % (rev, path)], binary=True)
+    except SystemExit:
+        return False
+    return bytes([0]) in blob[:8192]
+
+
 def _diff_added_lines(base, rev):
     """[(path, new_line_no, text)] - the lines commit `rev` ADDS relative to `base` (its first
     parent, or the empty tree for a root commit), parsed from one `git diff --unified=0`.
@@ -1581,7 +1661,8 @@ def _diff_added_lines(base, rev):
     A '+++ ' line is a header ONLY outside a hunk - inside one it is content ('++ x' arrives
     as '+++ x' and is kept, as the staged scanner does); a C-quoted header path is unquoted.
     A deleted file has no '+++ b/' header and contributes nothing; lines carrying a NUL (a
-    binary blob forced to text) are dropped rather than scanned as garbage."""
+    binary blob forced to text) are dropped rather than scanned as garbage - the NUL-free
+    lines of a binary ARE kept here, for the pattern floor; the docs feed drops them by blob."""
     out = _run_git(["-c", "core.quotepath=false", "diff", "--unified=0", "--text", "--no-color",
                     "--no-ext-diff", "--no-textconv", "--no-relative",
                     "--src-prefix=a/", "--dst-prefix=b/", base, rev])
@@ -1638,9 +1719,12 @@ def _push_secret_audit(revs, doc_revs=None):
     """(hard, soft, doc_text) over the outgoing commits: every ADDED line of every commit is
     scanned with the same floor as commit time; hits split into HARD (anchored literals) and
     SOFT (the assignment heuristic) as (rev12, path, line, label); the added lines of
-    non-code paths are concatenated for the docs model - from `doc_revs` only when given (the
-    commits not already on the remote's tracking refs: the floor still covers every commit in
-    `revs`, the docs MODEL is not re-fed history the remote already holds). A commit that
+    non-code, non-BINARY paths are concatenated for the docs model - from `doc_revs` only when
+    given (the commits not already on the remote's tracking refs: the floor still covers every
+    commit in `revs`, the docs MODEL is not re-fed history the remote already holds). A binary
+    blob's forced-text lines go through the floor like any other (a literal planted inside an
+    asset still refuses) but never to the docs model (2026-09-17: a PNG's deflate lines read as
+    secret-shaped garbage there), and the skip is said aloud once per blob. A commit that
     cannot be diffed is reported as a hard 'unscannable-commit' hit - the guard fails closed,
     never silently. A commit carrying the owner's OVERRIDE note has already been ruled on: its
     hard hits are demoted to warnings. A shallow-clone boundary commit is skipped with a loud
@@ -1648,6 +1732,7 @@ def _push_secret_audit(revs, doc_revs=None):
     hard, soft, doc_lines = [], [], []
     doc_set = None if doc_revs is None else set(doc_revs)
     boundaries = _shallow_boundaries()
+    binary_paths = {}                                    # (rev, path) -> bool, one `git show` per blob
     for rev in revs:
         if rev in boundaries:
             sys.stderr.write("adversary push guard: %s is a shallow-clone boundary commit - its "
@@ -1670,7 +1755,14 @@ def _push_secret_audit(revs, doc_revs=None):
                     (hard if _hard_label(label) else soft).append((rev[:12], path, ln, label))
                 break
             if not _is_code(path, hn) and (doc_set is None or rev in doc_set):
-                doc_lines.append(text)
+                key = (rev, path)
+                if key not in binary_paths:
+                    binary_paths[key] = _blob_is_binary(rev, path)
+                    if binary_paths[key]:
+                        sys.stderr.write("adversary push guard: %s %s is binary - its lines are not fed to the "
+                                         "docs model (the pattern floor still scanned them).\n" % (rev[:12], path))
+                if not binary_paths[key]:
+                    doc_lines.append(text)
     return hard, soft, "\n".join(doc_lines)
 
 

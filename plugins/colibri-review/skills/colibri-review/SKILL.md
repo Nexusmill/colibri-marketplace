@@ -28,10 +28,49 @@ production.
   paths, `__init__` / `app` / `main` / `core` / `cli` / `server`), deny-list vendored/scratch trees
   (`.git venv node_modules build dist vendor __pycache__ *.min.* site-packages` and any
   scratch/output dirs), skip files > 2 MB.
+- **Tests are units, not filler:** `tests/`, `test_*`, `*_test.*`, `*.test.*`, harness probes and
+  fixtures are review units in their own right — "core-first" is an ORDER, never an exclusion, and
+  errors live in tests too. A test unit's contract source is the code it claims to test: pull that
+  symbol's source into the context pack and audit the assertion against it. Hunt the test-specific
+  classes: assertions that cannot fail (tautologies, a value compared to itself, `assert True`,
+  exceptions swallowed before the assert); a stale or wrong target (regex/path-extracted source, a
+  stub or fixture shadowing the real symbol, a mock that mocks away the behavior under test);
+  runners that report PASS on exception or exit 0 on failure; silent skips masquerading as passes;
+  order or shared-state coupling; fixture and environment leaks (temp dirs, env vars, monkeypatches
+  never restored); hard-coded machine paths; non-deterministic inputs without a seed.
+- **Every code extension counts:** ES-module and typed JavaScript (`.mjs .cjs .mts .cts`) stand on
+  the same footing as `.js`/`.ts`; a scan that skips them is incomplete.
 - **Freshness:** read the CURRENT on-disk file at dispatch time — never a snapshot, never memory of
   an earlier read. Record `sha256` of the exact bytes reviewed.
-- **Cache check:** if a prior review for this file+mode at the same sha exists (see the review store
-  in Phase 4), do NOT re-review — report the existing one unless explicitly forced.
+- **Cache check — a prior review is CONTEXT, never a skip (all five modes):** if a prior
+  review for this file+mode at the same sha exists (see the review store in Phase 4), do
+  NOT re-review from scratch and do NOT report-and-walk-away: load the prior review(s) as
+  CONTEXT and hunt ONLY what they do not already contain — new defects (bug), new
+  improvements (quality), new add-ons (feature), new divergences (spec), new
+  plan-relevant defects (plan). A pass that restates recorded findings has failed the
+  hunt; every pass must surface new material or HONESTLY record that it found none
+  (`new: 0`). Record later passes as lineage (a `pass2`/`passN` sub-entry beside the
+  row's original `output`, each carrying `model`, `reviewed_at`, `output`, and `new` —
+  the count of new findings), never by overwriting the prior artifact's pointer — the
+  prior review IS the context the next pass needs, and the committed record must keep
+  naming it.
+- **THE THREE-MODEL LOCK:** bug / quality / spec / plan can LOCK (feature mode is
+  EXEMPT — features are infinite; it hunts forever and never locks). When THREE DIFFERENT
+  model types — distinct model families (e.g. the in-session model and two external
+  reviewers; two versions of one family count as ONE type) — have each run an additional
+  context-loaded pass at the SAME sha and NONE surfaced new material, the file is LOCKED
+  for that mode at that sha: no further scans of that mode until the file's bytes change —
+  not a force flag, not a fourth model. Prefer dispatching a pass to a model type that has
+  not already recorded an empty pass at this sha (a repeat of an emptied type cannot
+  advance the lock). A pass that DOES surface new material RESETS the exhaustion count —
+  the context grew, so three fresh empty passes by three distinct types are needed again.
+  A changed sha dissolves the lock and the stale-file DELTA flow below takes over.
+- **Lock bookkeeping:** on the third empty type, write `locked: {"sha": "<sha>",
+  "models": ["<type>", "<type>", "<type>"], "at": "YYYY-MM-DD HH:MM"}` beside the mode's
+  `output` (same sub-object spot as the pass lineage), atomically with the manifest
+  write. A cache hit on a locked row REFUSES the scan and answers with the lock card:
+  which three model types tried, when the row locked, and where the last full review
+  lives — the file's bytes changing is the only key.
 - **Stale-file DELTA (file changed since its last review):** load the prior review and review
   AGAINST it — report ONLY findings that are new or changed, and close the loop on the old ones
   under a `## Fixed since last review` heading (fixed, still-open, or verified-stale). Never
@@ -162,9 +201,13 @@ Same laws + the debug ladder, in order, no skipping:
   in this shape (a `files` wrapper, 8-hex shas, relative-keyed or wrapperless rows) is migrated
   WHOLE before any row is added — `python -m repo_memory.colibri --repo <root> --migrate`
   rewrites it in place — because a legacy file has nothing canonical to fold into and a row
-  appended beside it fragments the record (Blink and Caliper, 2026-09-10). This is the
-  sha-keyed cache Phase 0 checks. Write it ATOMICALLY (tmp → os.replace): a corrupted manifest
-  silently resets the whole project's review cache and every file re-reviews as "new".
+  appended beside it fragments the record. This is the
+  sha-keyed cache Phase 0 checks. Pass lineage (`pass2..passN: {"model", "reviewed_at",
+  "output", "new": <count>}`) and the lock marker (`locked: {"sha", "models", "at"}`) live
+  BESIDE `output` INSIDE the mode object — never at the entry top level, never replacing
+  the original `sha`/`output` (the pointer the lineage extends). Write it ATOMICALLY
+  (tmp → os.replace): a corrupted manifest silently resets the whole project's review
+  cache and every file re-reviews as "new".
 - Multi-file jobs end with ONE synthesis section (cross-file findings, ranked) after all per-file
   units — never instead of them.
 - Repo work → commit per your project's convention (e.g. `review(scope):` or `fix(scope):`), with
@@ -182,8 +225,10 @@ five modes, including spec with `--spec` and plan with `--findings`.)
 
 ## Non-negotiables recap
 One file at a time · context pack first · code-intelligence tooling over ad-hoc text search ·
-current bytes + sha recorded · project records consulted before and updated after · five modes —
-bug / quality / feature / spec / plan · every finding CONFIRMED or labeled PLAUSIBLE · spec =
+tests and every code extension (`.mjs` included) are units · current bytes + sha recorded · a prior review is CONTEXT, never a skip · three empty model
+types = LOCKED until the bytes change (feature never locks) · project records consulted
+before and updated after · five modes — bug / quality /
+feature / spec / plan · every finding CONFIRMED or labeled PLAUSIBLE · spec =
 contract in, divergences only, unjudgeable named, never a self-invented contract · plan =
 test-first and never executed by its author · debug = reproduce → hypothesize → verify → log ·
 commit at close, through any armed gate.

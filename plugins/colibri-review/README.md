@@ -13,8 +13,9 @@ module, check code against a spec or stated expectations, plan the remediation o
 debug a failure, investigate an error, or fix a reported defect, this plugin's skill kicks
 in and runs the protocol:
 
-1. **Scope & freshness** — pick the file, read its *current* bytes, record a sha, and skip anything
-   already reviewed at that sha or already fixed in your remediation log.
+1. **Scope & freshness** — pick the file, read its *current* bytes, record a sha, and load
+   anything already reviewed at that sha as **context**: every pass hunts only NEW findings
+   beyond what the record already contains.
 2. **Context pack** — map the file's symbols and call sites (via whatever code-intelligence tooling
    you have), pull relevant project docs/decisions, and check what changed recently.
 3. **Review pass** — one of five modes, each with a strict output contract and
@@ -39,8 +40,12 @@ The skill loads automatically on review/debug requests. You can also invoke it b
 
 ## Conventions it introduces
 
-- **`.colibri_reviews/`** — a folder of per-file review notes plus a `_manifest.json` cache so
-  unchanged files are never re-reviewed. Commit it or gitignore it, your call.
+- **`.colibri_reviews/`** — a folder of per-file review notes plus a `_manifest.json` cache.
+  A prior review is never skipped: it loads as context and the next pass hunts only new
+  findings, recorded as `pass2`/`passN` lineage. When **three different model types** each
+  come back empty at the same sha, the file+mode is **LOCKED** — no further scans of that
+  mode until the file's bytes change (feature mode never locks: its space is infinite).
+  Commit it or gitignore it, your call.
 - If your project keeps a **remediation log** (a record of fixed defects), the skill reads it before
   reviewing so it never re-flags or re-"fixes" already-closed issues, and appends to it when it
   lands a fix.

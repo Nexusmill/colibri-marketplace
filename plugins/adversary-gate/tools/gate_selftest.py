@@ -1322,6 +1322,48 @@ def main():
           and "second entry" in p and "files" in p and "wrapperless" in p,
           p[-400:])
 
+    # 43. binary blobs never reach the docs model (2026-09-17): a one-PNG brand commit's push was REFUSED - `--text`
+    #     forces a diff of the binary and its NUL-free lines (28,881 from one 2 MB image) went to the docs model as
+    #     documentation, which flagged secret-shaped garbage in chunk 8. The staged scanner already skips a blob with
+    #     a NUL in its first 8 KB (_staged_doc_files); the push audit applies the same rule per path. The doc beside
+    #     the image is still fed, so the skip is per blob, never per commit.
+    import random
+    tmp2 = tempfile.mkdtemp(prefix="advgate_bin_")
+    subprocess.run([GIT, "init", "-q", tmp2], capture_output=True)
+    git(tmp2, "config", "user.email", "t@t")
+    git(tmp2, "config", "user.name", "t")
+    rnd = random.Random(7)
+    alphabet = b"abcdefghijklmnopqrstuvwxyz0123456789=+/"
+    body = b"\n".join(bytes(rnd.choice(alphabet) for _ in range(60)) for _ in range(400))
+    with open(os.path.join(tmp2, "art.png"), "wb") as fh:
+        fh.write(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + body)  # a NUL in the header, NUL-free lines after
+    with open(os.path.join(tmp2, "NOTE.md"), "w", encoding="utf-8") as fh:
+        fh.write("a real doc line\n")
+    git(tmp2, "add", "art.png", "NOTE.md")
+    git(tmp2, "commit", "-q", "-m", "brand image")
+    sha = git(tmp2, "rev-parse", "HEAD").stdout.strip()
+    # the gate's own round on this fix: the skip is for the DOCS FEED only - a hard literal planted inside a binary
+    # asset must still refuse the push (built from parts at runtime, never a literal in these bytes)
+    planted = "AK" + "IA" + "ABCDEFGHIJKLMNOP"
+    with open(os.path.join(tmp2, "cred.bin"), "wb") as fh:
+        fh.write(b"\x00BIN\n" + body[:600] + b"\nkey = " + planted.encode("ascii") + b"\n" + body[600:1200])
+    git(tmp2, "add", "cred.bin")
+    git(tmp2, "commit", "-q", "-m", "asset with a planted literal")
+    sha_bin = git(tmp2, "rev-parse", "HEAD").stdout.strip()
+    cwd0 = os.getcwd()
+    os.chdir(tmp2)
+    try:
+        hard2, soft2, docs2 = _g._push_secret_audit([sha])
+        hard3, _soft3, docs3 = _g._push_secret_audit([sha_bin])
+    finally:
+        os.chdir(cwd0)
+    check("push_audit_never_feeds_a_binary_blob_to_the_docs_model",
+          docs2.strip() == "a real doc line" and not hard2 and not soft2,
+          "doc lines %d hard %d soft %d" % (docs2.count("\n") + 1, len(hard2), len(soft2)))
+    check("push_audit_floor_still_refuses_a_literal_planted_inside_a_binary",
+          any(h[1] == "cred.bin" for h in hard3) and docs3.strip() == "",
+          "hard %s docs %d" % (hard3[:2], len(docs3)))
+
     bad = {k: v for k, v in results.items() if not v[0]}
     print("\n%d/%d PASS" % (len(results) - len(bad), len(results)))
     return 1 if bad else 0

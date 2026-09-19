@@ -94,6 +94,10 @@ def main():
         # embedded test code `monkeypatch.setenv("XAI_API_KEY", "k")` - the model quoted `"k"` as the
         # secret value. A ONE-CHARACTER literal is never a credential and names no value.
         '"k"', "'k'", "k", 'XAI_API_KEY set to "k"', "the value " + "7",
+        # push-guard PRE-TEST 2026-09-16 (the model-pins push feed, chunk 20, 3/3): a reviewer response quoting a
+        # code fixture's `timeout_s: float = 30.0` - the model held `30.0` as the secret value. A decimal FLOAT
+        # literal is a quantity (a timeout, a price, a version), never a credential, and names no value.
+        "30.0", '"30.0"', "the value " + "30.0", "0.02", "the value " + "0.0002", "-1.5",
     ]                                                       # ELIDED vendor prefix names no value                                                       # vocabulary (fleet probe 2026-09-08)
     aws_example = "AKIA" + "IOSFODNN7" + "EXAMPLE"          # gate round 1: an ALL-CAPS VALUE
     project_id = "crafty-" + "hook-" + "483415" + "-b3"
@@ -122,6 +126,9 @@ def main():
         "x-ai/" + "admin", "nvidia", "password " + "nvidia", "z-ai", "the value " + "qwen",
         # the one-character rule stops at ONE: two characters and up stay values (PW above holds too)
         '"k7"', "k7", "kQ", "k7Qz", 'XAI_API_KEY set to "k7"',
+        # the float rule is digits.digits ONLY: an integer (a PIN), a dotted triple, a float glued to letters, a
+        # hex-looking run and an over-long mantissa all keep their value status
+        "1234", "123456", "1.2.3", "30.0a", "0x1.8p3", "1234567.1234567", "3.14" + "159265358979",
     ]                             # real key OR a complete short password + prose ellipsis holds (round 4)                                                          # value never withdraws (round 2)
     check("evidence_names_withdraw", all(ds._evidence_is_name(n) for n in names),
           str([n for n in names if not ds._evidence_is_name(n)]))
