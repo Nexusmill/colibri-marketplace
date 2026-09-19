@@ -1,0 +1,22 @@
+{
+ "type": "CLEAR",
+ "commit": "264a5d2179e9a6daacb73d88bf03ea30df714f14",
+ "when": "20260919-104727",
+ "files": {
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "dedc0aab1b8e7af1ad4c81d85cf226a149dcaa559b752b3a9b873c4f132754fc",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260919-104710",
+   "artifact": ".adversary\\reviews\\gate_20260919-104710.md"
+  },
+  "plugins/colibri-review/hooks/hooks.json": {
+   "sha": "716e65a3ee4b1d9f7b05c4ef460527d34b01ae8a37cf53c3f3711a564f97cac7",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260919-104710",
+   "artifact": ".adversary\\reviews\\gate_20260919-104710.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260919-104710.md": "model: z-ai/glm-5.3-flash | provider: Together | usage: {'prompt_tokens': 1966, 'completion_tokens': 7278, 'total_tokens': 9244, 'cost': 0.0039339, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0039339, 'upstream_inference_prompt_cost': 0.0002949, 'upstream_inference_completions_cost': 0.003639}, 'completion_tokens_details': {'reasoning_tokens': 6516, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['plugins/colibri-review/.claude-plugin/plugin.json', 'plugins/colibri-review/hooks/hooks.json']\n\n## Adversarial review \u2014 colibri-review 0.4.0 (plugin.json M, hooks.json A)\n\n**Weighing the rebuttal against the provided bytes:**\n\n**Finding 1 (session-start.cmd not staged) \u2014 rebuttal verified, settled.** The only index entries I can independently cross-check against the payload corroborate the author's `ls-files` output exactly: the plugin.json diff header reads `index fb5d588..ba56e38` and the rebuttal lists `ba56e38de42dbe7...` for that path; the hooks.json diff header reads `index 0000000..f943a25` and the rebuttal lists `f943a258f976...` for `hooks/hooks.json`. Both match exactly. The payload's .md/.cmd lane filter explains the invisibility of session-start.cmd, doctrine.md, and SKILL.md; the index listing shows all three staged (76c26d9, 9c18fe1, f1ea1c5). The referenced script therefore exists in the commit, its `type \"%~dp0doctrine.md\" 2>nul` resolves correctly against staged `hooks/doctrine.md` (`%~dp0` = the hooks dir, trailing backslash correctly concatenated), and the mechanism is the same gate-cleared pattern as repo-memory v1.1.0. Re-raising this would re-litigate a factually settled point.\n\n**Finding 2 (Windows-only .cmd) \u2014 settled by design precedent.** The marketplace serves a Windows-only fleet; the identical mechanism ships in the platform's own superpowers plugin and repo-memory v1.1.0. No contrary bytes in evidence. Portability preference, not a defect in this deployment context.\n\n**Finding 3 (matcher omits resume) \u2014 settled as deliberate.** `startup|clear|compact` matches the platform reference hook exactly; resume restores prior context that already contains the injection. Consistent, intentional.\n\n**Fresh hunt over the visible bytes \u2014 nothing real:**\n\n- `hooks/hooks.json` schema shape (`hooks` \u2192 `SessionStart` \u2192 `matcher` + `hooks[]` with `type`/`command`) is the documented plugin hook layout at the correct auto-discovered path (`hooks/hooks.json`); no registration in plugin.json is required.\n- `${CLAUDE_PLUGIN_ROOT}` is the sanctioned plugin-root expansion for hook commands; the inner quoting survives paths with spaces, and `cmd /c \"...\"` with exactly two quote chars strips correctly.\n- `async: false` at worst is an ignored field defaulting to synchronous \u2014 which is the intended behavior; no failure path either way.\n- `2>nul` (not `/dev/null`) is correct for cmd; a missing doctrine.md degrades to a silent no-op, not a hang or error. `exit /b 0` yields hook success; SessionStart stdout injection is the intended delivery channel.\n- No state, ordering, or money-safety surface: the hook is read-only and stateless; it executes a static script from the plugin root with no interpolation of untrusted input.\n- Version bump 0.3.1 \u2192 0.4.0 (minor for a feature addition) and the \"Ships the scan ladder\" description claim are backed per the corroborated index by the staged SKILL.md (f1ea1c5) gaining the scan-ladder section; no caller or registry in the provided bytes pins the old version.\n- No manifest (.colibri_reviews) rows are touched by this change.\n\nNo defect is introduced or enabled by this change set that survives verification.\n\nVERDICT: CLEAR"
+ }
+}
