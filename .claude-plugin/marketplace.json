@@ -30,8 +30,8 @@
     {
       "name": "colibri-review",
       "source": "./plugins/colibri-review",
-      "description": "A rigorous, context-aware code review & debug protocol: one file at a time, context before code, adversarially verified findings, five modes — bug, quality, feature, spec conformance, remediation plan. Prior reviews load as context and every pass hunts new findings; three empty model types lock a file+mode until its bytes change.",
-      "version": "0.3.1",
+      "description": "A rigorous, context-aware code review & debug protocol: one file at a time, context before code, adversarially verified findings, five modes — bug, quality, feature, spec conformance, remediation plan. Prior reviews load as context and every pass hunts new findings; three empty model types lock a file+mode until its bytes change. Ships the scan ladder (owner order 2026-09-19): after a feature run every changed file is bug-scanned by a second model family and any HIGH escalates to a third — context-loaded, new-findings-only.",
+      "version": "0.4.0",
       "author": {
         "name": "Nexusmill"
       },
