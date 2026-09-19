@@ -1,0 +1,22 @@
+{
+ "type": "CLEAR",
+ "commit": "c1d41a8a5881d03103959e80a1da27bf3dd7f440",
+ "when": "20260919-083827",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "9d31e3443856f056fced7cb1cdea61235bb496bfcc19fe436ba1a017632c9e43",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260919-083824",
+   "artifact": ".adversary\\reviews\\gate_20260919-083824.md"
+  },
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "cf5e95e7dbfd5c7abfa78b78da6a90b3484fbc74140b00691782495ff33ff062",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260919-083824",
+   "artifact": ".adversary\\reviews\\gate_20260919-083824.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260919-083824.md": "model: z-ai/glm-5.3-flash | provider: Relace | usage: {'prompt_tokens': 1471, 'completion_tokens': 2055, 'total_tokens': 3526, 'cost': 0.00074889, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.00074889, 'upstream_inference_prompt_cost': 0.00013239, 'upstream_inference_completions_cost': 0.0006165}, 'completion_tokens_details': {'reasoning_tokens': 1590, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/colibri-review/.claude-plugin/plugin.json']\n\n## Adversarial Review\n\n**Scope of change:** Pure metadata version bump for `colibri-review`: `0.3.0` \u2192 `0.3.1`, applied in exactly two places.\n\n**Checks performed against the staged bytes:**\n\n1. **Cross-file version consistency** \u2014 `.claude-plugin/marketplace.json` (colibri-review entry) and `plugins/colibri-review/.claude-plugin/plugin.json` both now read `\"0.3.1\"`. No drift between marketplace and plugin manifest; this is the classic failure mode for plugin version bumps and it is not present here.\n\n2. **Collateral damage to sibling entries** \u2014 The `adversary-gate` entry in `marketplace.json` retains `\"0.3.4\"`; the hunk boundaries (`@@ -26,17 +26,17 @@`) touch only the colibri-review object. Verified by counting lines in the full staged file: the hunk opens at line 26 (`\"supply-chain\"`) and closes at line 42, entirely inside/adjacent to the colibri-review block. No other plugin's fields were altered.\n\n3. **JSON validity** \u2014 Both full staged files parse as well-formed JSON: balanced braces/brackets, correct comma placement, no trailing commas introduced by the edit.\n\n4. **Hunk arithmetic** \u2014 `plugin.json` hunk `@@ -1,11 +1,11 @@` matches the file's actual head (11 lines old/new, single-line substitution at line 3). Line/symbol assumptions in the diff are accurate.\n\n5. **Callers/consumers** \u2014 Version strings in plugin manifests are declarative; no code in the provided bytes parses or asserts on `\"0.3.0\"`, so no broken call sites. No other staged file references the old version.\n\n6. **Colibri lock semantics** \u2014 Changing these files' bytes invalidates any existing file+mode locks per the stated design (\"lock until its bytes change\"). That is intended unlock behavior, not a defect.\n\n7. **Semver sanity** \u2014 Metadata-only change as a patch bump (0.3.0 \u2192 0.3.1) is semantically appropriate.\n\nNo logic, no state, no callers, no contract with surrounding code is altered. Both manifests agree; nothing else moved.\n\nVERDICT: CLEAR"
+ }
+}
