@@ -1,0 +1,22 @@
+{
+ "type": "CLEAR",
+ "commit": "caea105df09db6e364dd8185cc99d07603b74945",
+ "when": "20260919-070856",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "cf0d3f20aa84f0af78708c6609473eb1b5ce2cfe8448b483e3c4c0e835c8419b",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260919-070853",
+   "artifact": ".adversary\\reviews\\gate_20260919-070853.md"
+  },
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "cf5e95e7dbfd5c7abfa78b78da6a90b3484fbc74140b00691782495ff33ff062",
+   "model": "z-ai/glm-5.3-flash",
+   "when": "20260919-070853",
+   "artifact": ".adversary\\reviews\\gate_20260919-070853.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260919-070853.md": "model: z-ai/glm-5.3-flash | provider: Relace | usage: {'prompt_tokens': 1472, 'completion_tokens': 1970, 'total_tokens': 3442, 'cost': 0.00072348, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.00072348, 'upstream_inference_prompt_cost': 0.00013248, 'upstream_inference_completions_cost': 0.000591}, 'completion_tokens_details': {'reasoning_tokens': 1678, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/colibri-review/.claude-plugin/plugin.json']\n\nReviewed the staged change: a version bump for `colibri-review` from 0.3.0 \u2192 0.3.1, touching exactly two files.\n\nChecks performed against the provided bytes:\n\n1. **Cross-file version consistency** \u2014 `.claude-plugin/marketplace.json` (colibri-review entry) and `plugins/colibri-review/.claude-plugin/plugin.json` both declare `\"0.3.1\"`. No mismatch between marketplace manifest and plugin manifest, which is the only version contract visible in these files.\n2. **No regression/skip** \u2014 colibri-review moves 0.3.0 \u2192 0.3.1 (monotonic patch bump); the sibling `adversary-gate` entry remains untouched at 0.3.3, so no accidental edit to the other plugin's record.\n3. **JSON validity** \u2014 both full staged files parse cleanly: balanced braces/brackets, no trailing commas, all string values properly quoted. `\"0.3.1\"` is valid semver for any schema-level version constraint.\n4. **Collateral drift** \u2014 the diff hunks touch only the `version` lines; description, keywords, author, license, name, and source fields are byte-identical between the two files and unchanged from the prior revision. No description/keyword divergence introduced between marketplace entry and plugin manifest.\n5. **Manifest doctrine** \u2014 no `.colibri_reviews/_manifest.json` rows are touched; the absolute-path/rel/modes shape is not implicated by this change.\n6. **Enabled risk** \u2014 version strings are inert data here: no callers, no logic branches, no state, no money/security surface. A patch bump with zero behavioral delta cannot break a consumer beyond the intended update itself.\n\nNo defect found that this change introduces or enables.\n\nVERDICT: CLEAR"
+ }
+}
