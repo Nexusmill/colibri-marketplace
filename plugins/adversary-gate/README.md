@@ -35,9 +35,8 @@ commit.
   installer (or `git config core.hooksPath .githooks`) once. The push guard and CI
   audit exist precisely because client-side hooks are advisory.
 - **The reviewer costs money — yours.** Reviews run on OpenRouter with YOUR
-  `OPENROUTER_API_KEY` (the shipped default chain is GLM-5.3-Flash via OpenRouter,
-  then DeepSeek-V4-Flash pinned to two named OpenRouter endpoints, then xAI Grok-4.6
-  on your `XAI_API_KEY` — the exact ids are the `DEFAULT_CHAIN` line in
+  `OPENROUTER_API_KEY` (the shipped default chain is Luna Pro, Qwen 3.8 Flash,
+  DeepSeek V4 Pro, GLM 5.3 Flash, then DeepSeek V4 Flash via OpenRouter — the exact ids are the `DEFAULT_CHAIN` line in
   `tools/adversary_gate.py`; override with `--model` or `ADVERSARY_MODEL`). A chain
   entry `model@tag1+tag2` pins the OpenRouter providers that may serve it, in that
   order, fallbacks off; every review header records the provider that served it.
@@ -94,8 +93,8 @@ troubleshooting chapter where every entry actually happened:
 ## Selftests (no network; the external model is stubbed)
 
 ```
-python <plugin-root>/tools/gate_selftest.py      # 129 checks - gate, notary, push guard, secret floor, removed-symbol refusal, the pinned chain
-python <plugin-root>/tools/install_selftest.py   # 73 checks - installer claims incl. relocation
+python <plugin-root>/tools/gate_selftest.py      # 203 checks - gate, notary, push guard, secret floor, removed-symbol refusal, the pinned chain
+python <plugin-root>/tools/install_selftest.py   # 77 checks - installer claims incl. relocation
 python <plugin-root>/tools/audit_selftest.py     # 50 checks - bypass/forgery/override detection
 python <plugin-root>/tools/guard_selftest.py     # 231 checks - the harness deny-guard matrix
 python <plugin-root>/tools/docscan_selftest.py   # 14 checks - the local docs reviewer (needs the model)
@@ -132,7 +131,7 @@ duplicate module name, a re-exporter, or a module the resolver cannot find at al
 ## Provenance
 
 This plugin is a versioned snapshot of the canonical suite in the Nexusmill Tools
-repo at commit `dbbc1e3` (2026-09-19; the adversary-gate suite last changed in e51909c). The canonical source of truth remains that
+repo at commit `2a4675f98da1df083c6ad0e1a84a3dc7f59d5490` (2026-09-27). The canonical source of truth remains that
 repo; the snapshot is updated deliberately, with the same adversarial review this
 tool enforces — every commit of this marketplace passes its own gate.
 

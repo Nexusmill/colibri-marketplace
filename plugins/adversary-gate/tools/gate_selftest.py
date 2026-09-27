@@ -63,6 +63,194 @@ def main():
           "missing: %s" % [p for p in ("tools/git-guard.mjs", "lib/x.cjs", "src/a.mts", "src/b.cts")
                            if not _g._is_code(p)])
     check("code_exts_docs_still_not_code", not _g._is_code("README.md") and not _g._is_code("notes.txt"))
+
+    # Snapshot must defer blob reads until the bounded payload composer consumes them.
+    import ast as _ast_lazy
+    _tree_lazy = _ast_lazy.parse(open(GATE, encoding="utf-8").read())
+    _fn_lazy = next(n for n in _tree_lazy.body if isinstance(n, _ast_lazy.FunctionDef)
+                    and n.name == "_cmd_run_snapshot")
+    _reads_lazy = []
+    class _StopLazy(Exception):
+        pass
+    def _read_lazy(args, binary=False):
+        _reads_lazy.append(args[-1])
+        return b"x"
+    def _compose_lazy(diff, blobs, context):
+        if _reads_lazy:
+            raise AssertionError("all staged blobs were loaded before composing")
+        if list(blobs) != [("a.py", b"x"), ("b.py", b"x")]:
+            raise AssertionError("staged blob contents or order changed")
+        raise _StopLazy()
+    _ns_lazy = dict(_g.__dict__)
+    _ns_lazy.update(_repo_root=lambda: ".", _scan_staged_secrets=lambda: [],
+                    _staged_code_files=lambda: ["a.py", "b.py"], _staged_removals=lambda: [],
+                    _removed_symbol_callers=lambda: [], _diff_paths=lambda *a: "",
+                    _blob_is_binary=lambda *a: False,
+                    _run_git=_read_lazy, _compose_review_payload=_compose_lazy)
+    exec(compile(_ast_lazy.Module(body=[_fn_lazy], type_ignores=[]), GATE, "exec"), _ns_lazy)
+    try:
+        _ns_lazy["_cmd_run_snapshot"]("unused", "")
+        _ok_lazy, _why_lazy = False, "composer never invoked"
+    except _StopLazy:
+        _ok_lazy, _why_lazy = True, ""
+    except AssertionError as _exc_lazy:
+        _ok_lazy, _why_lazy = False, str(_exc_lazy)
+    check("snapshot_defers_staged_blob_reads", _ok_lazy, _why_lazy)
+
+    # A failed evidence write must not enter an unlocked artifact/clearance path.
+    import contextlib as _ctx_evidence
+    import io as _io_evidence
+    def _unavailable_evidence(*args, **kwargs):
+        raise RuntimeError("review-round lock busy")
+    def _forbidden_evidence(*args, **kwargs):
+        raise AssertionError("unlocked fallback touched review evidence")
+    _ns_evidence = dict(_ns_lazy)
+    _ns_evidence.update(_compose_review_payload=lambda *a: "payload",
+                        _scrub_text=lambda p: (p, []),
+                        _route_chain=lambda m, p, c: (m, "default"),
+                        _call_model_ex=lambda *a: ("VERDICT: CLEAR", {}, "fixture", "fixture"),
+                        _staged_sha=lambda p: "fixture-sha",
+                        _write_review_round=_unavailable_evidence,
+                        _adv_dir=_forbidden_evidence, _save_clear=_forbidden_evidence)
+    exec(compile(_ast_lazy.Module(body=[_fn_lazy], type_ignores=[]), GATE, "exec"), _ns_evidence)
+    try:
+        with _ctx_evidence.redirect_stdout(_io_evidence.StringIO()):
+            _rc_evidence = _ns_evidence["_cmd_run_snapshot"]("fixture", "")
+        _ok_evidence, _why_evidence = _rc_evidence == 1, str(_rc_evidence)
+    except AssertionError as _exc_evidence:
+        _ok_evidence, _why_evidence = False, str(_exc_evidence)
+    check("snapshot_evidence_failure_refuses_clearance", _ok_evidence, _why_evidence)
+
+    # Even oversized files marked -diff must expose source hunks to the reviewer.
+    import unittest.mock as _mock_diff
+    import contextlib as _ctx_diff
+    import io as _io_diff
+    with tempfile.TemporaryDirectory(prefix="adv-text-diff-") as _td:
+        git(_td, "init", "-q")
+        with open(os.path.join(_td, ".gitattributes"), "w", encoding="utf-8") as _fh:
+            _fh.write("*.py -diff\n")
+        with open(os.path.join(_td, "large.py"), "w", encoding="utf-8") as _fh:
+            _fh.write('VALUE = "' + "a" * 260_000 + '"\n# BINARY_DIFF_MARKER\n')
+        git(_td, "add", ".gitattributes", "large.py")
+        _payloads_diff = []
+        def _review_diff(model, payload):
+            _payloads_diff.append(payload)
+            return "VERDICT: BLOCK", {}, "fixture", "fixture"
+        _cwd_diff = os.getcwd()
+        try:
+            os.chdir(_td)
+            with _mock_diff.patch.object(_g, "_call_model_ex", side_effect=_review_diff):
+                with _ctx_diff.redirect_stdout(_io_diff.StringIO()):
+                    _rc_diff = _g.cmd_run("fixture", "")
+        finally:
+            os.chdir(_cwd_diff)
+        check("oversized_binary_attribute_still_reviews_text",
+              _rc_diff == 1 and len(_payloads_diff) == 1
+              and "BINARY_DIFF_MARKER" in _payloads_diff[0],
+              "oversized source was hidden from the review payload")
+
+        with open(os.path.join(_td, "large.py"), "wb") as _fh:
+            _fh.write(b"\0" + b"a" * 260_000)
+        git(_td, "add", "large.py")
+        _payloads_diff.clear()
+        try:
+            os.chdir(_td)
+            with _mock_diff.patch.object(_g, "_call_model_ex", side_effect=_review_diff):
+                with _ctx_diff.redirect_stdout(_io_diff.StringIO()):
+                    _rc_diff = _g.cmd_run("fixture", "")
+        finally:
+            os.chdir(_cwd_diff)
+        check("binary_code_refused_before_review",
+              _rc_diff == 1 and not _payloads_diff,
+              "opaque binary code reached the external reviewer")
+
+        # Binary content on the removed side must also never reach the reviewer.
+        git(_td, "config", "core.hooksPath", os.path.join(_td, "unused-fixture-hooks"))
+        git(_td, "config", "user.name", "test")
+        git(_td, "config", "user.email", "test@example.invalid")
+        git(_td, "commit", "-qm", "binary fixture base")
+        with open(os.path.join(_td, "large.py"), "w", encoding="utf-8") as _fh:
+            _fh.write("VALUE = 1\n")
+        git(_td, "add", "large.py")
+        _payloads_diff.clear()
+        try:
+            os.chdir(_td)
+            with _mock_diff.patch.object(_g, "_call_model_ex", side_effect=_review_diff):
+                with _ctx_diff.redirect_stdout(_io_diff.StringIO()):
+                    _rc_diff = _g.cmd_run("fixture", "")
+        finally:
+            os.chdir(_cwd_diff)
+        check("binary_base_refused_before_review",
+              _rc_diff == 1 and not _payloads_diff,
+              "removed binary content reached the external reviewer")
+
+    # Corrupt append-only evidence must survive every read-modify-write path.
+    for _which in ("adjudication", "stamp", "round"):
+        with tempfile.TemporaryDirectory(prefix="adv-corrupt-") as _coroot:
+            _coadv = _g._adv_dir(_coroot)
+            _copath = os.path.join(_coadv, "adjudications.json") if _which == "adjudication" else os.path.join(_coadv, "reviews", "staged_shas.json")
+            with open(_copath, "wb") as _cofh:
+                _cofh.write(b"{broken evidence")
+            _coraised = False
+            try:
+                if _which == "adjudication":
+                    _g._append_adjudication(_coroot, {"commit": "fixture"})
+                elif _which == "stamp":
+                    _g._stamp_review_meta(_coroot, "gate_fixture.md", {"a.py": "sha"}, False)
+                else:
+                    _g._write_review_round(_coroot, "20260927-120000",
+                                           "VERDICT: BLOCK", {"a.py": "sha"}, False)
+            except RuntimeError:
+                _coraised = True
+            with open(_copath, "rb") as _cofh:
+                _copreserved = _cofh.read() == b"{broken evidence"
+            check("corrupt_evidence_preserved_" + _which, _coraised and _copreserved,
+                  "corrupt input must not be reset or overwritten")
+
+    # Age alone cannot prove a lock owner is dead (including POSIX unlink semantics).
+    with tempfile.TemporaryDirectory(prefix="adv-aged-lock-") as _lkroot:
+        _lkpath = os.path.join(_lkroot, "fixture.lock")
+        with open(_lkpath, "w", encoding="ascii") as _lkfh:
+            _lkfh.write(str(os.getpid()))
+        os.utime(_lkpath, (0, 0))
+        _lkfd = _g._adv_lock(_lkroot, "fixture", deadline_s=0.01)
+        check("aged_lock_not_stolen", _lkfd is None and os.path.exists(_lkpath))
+        if _lkfd is not None:
+            _g._adv_unlock(_lkroot, "fixture", _lkfd)
+        elif os.path.exists(_lkpath):
+            os.remove(_lkpath)
+        _lkfd = _g._adv_lock(_lkroot, "fixture", deadline_s=0.01)
+        check("lock_available_after_cleanup", _lkfd is not None)
+        if _lkfd is not None:
+            _g._adv_unlock(_lkroot, "fixture", _lkfd)
+
+    # Cache-efficiency tranche R1 (owner order 2026-09-23): the review payload is
+    # STABLE-FIRST/DIFF-LAST so consecutive rounds of one landing share the
+    # unchanged staged files as a provider-cacheable prefix (OpenRouter prompt
+    # caching is strict-prefix; the measured hit ratio under diff-first was ~3%
+    # across 237 reviews, with the only real hits on identical retries).
+    try:
+        _pl = _g._compose_review_payload(
+            "DIFFBODY", [("src/a.py", b"AAA BODY"), ("src/b.py", b"BBB BODY")], "NOTES")
+        _ok_pl = (_pl.index("FULL STAGED FILE src/a.py") < _pl.index("FULL STAGED FILE src/b.py")
+                  < _pl.index("STAGED DIFF") < _pl.index("REBUTTAL")
+                  and "DIFFBODY" in _pl.split("STAGED DIFF")[1])
+    except Exception as _e:                                   # noqa: BLE001 - a missing
+        _ok_pl, _pl = False, repr(_e)                         # helper is a FAIL, not a crash
+    check("review_payload_stable_first_diff_last", _ok_pl, str(_pl)[:200])
+
+    # size caps keep their legacy semantics: an oversized blob is omitted by
+    # note, in-budget files still ride in full, the diff always lands, and an
+    # empty context emits no rebuttal section
+    try:
+        _big = b"X" * (_g.MAX_FILE_BYTES + 1)
+        _pl2 = _g._compose_review_payload("D2", [("huge.py", _big), ("ok.py", b"fine")], "")
+        _ok2 = ("OMITTED FOR SIZE" in _pl2 and "XXXX" not in _pl2
+                and "FULL STAGED FILE ok.py" in _pl2 and "D2" in _pl2
+                and "REBUTTAL" not in _pl2)
+    except Exception as _e:                                   # noqa: BLE001
+        _ok2, _pl2 = False, repr(_e)
+    check("review_payload_omission_and_nocontext", _ok2, str(_pl2)[:200])
     # 2026-09-06 (universal arming): extensionless git HOOK files are code wherever they live -
     # the canonical shims in adversary-gate/ and the machine-wide dispatchers in
     # adversary-gate/hooks/ were never in the staged-code list (only .githooks/ was gated), so
@@ -94,22 +282,35 @@ def main():
     else:
         _e_detail = ""
     check("completion_parser_returns_provider", _ok, _e_detail)
-    # 0d. the default chain (owner ruling 2026-09-16, 31 live runs of this PROMPT against planted defects - fleet
-    # docs/design/2026-09-16-provider-pins.md): glm primary, deepseek-v4-flash the middle entry PINNED to the two
-    # OpenRouter endpoints that completed every run, grok the last chance. The literal default is checked (not
-    # DEFAULT_MODEL, which an ADVERSARY_MODEL in the environment overrides by design).
+    # Owner 2026-09-26: new primary/secondary; retain measured fallback pins.
     try:
         _chain = [m.strip() for m in _g.DEFAULT_CHAIN.split(",")]
-        _ok3 = (_chain == ["z-ai/glm-5.3-flash", "deepseek/deepseek-v4-flash@open-inference/fp8+gmicloud/fp8",
-                           "xai:grok-4.6"]
-                and _g._split_entry(_chain[1]) == ("deepseek/deepseek-v4-flash", ["open-inference/fp8", "gmicloud/fp8"])
-                and _g._split_entry("z-ai/glm-5.3-flash") == ("z-ai/glm-5.3-flash", [])
-                and _g._split_entry("xai:grok-4.6") == ("xai:grok-4.6", []))
+        _ok3 = (_chain == ["openai/gpt-6-luna-pro",
+                           "qwen/qwen3.8-flash",
+                           "deepseek/deepseek-v4-pro-0813@deepinfra/fp8+wafer+ionstream",
+                           "z-ai/glm-5.3-flash@parasail/fp8+coreweave/nvfp4+modal/fp8",
+                           "deepseek/deepseek-v4-flash@open-inference/fp8+deepinfra/fp8"]
+                and "grok" not in _g.DEFAULT_CHAIN
+                and _g._split_entry(_chain[0]) == (
+                    "openai/gpt-6-luna-pro",
+                    [])
+                and _g._split_entry("z-ai/glm-5.3-flashx@z-ai/fp8") == (
+                    "z-ai/glm-5.3-flashx", ["z-ai/fp8"]))
     except Exception as _e:  # noqa: BLE001 - a missing constant/helper is a FAIL, not a crashed selftest
         _ok3, _e3 = False, repr(_e)
     else:
         _e3 = ""
-    check("default_chain_glm_pinned_deepseek_grok", _ok3, _e3)
+    check("default_chain_grok_retired_fleet_ladder_pinned", _ok3, _e3)
+    try:
+        _g._split_entry("z-ai/glm-5.3-flash@")   # empty pin list must fail CLOSED
+        _ok3b = False
+    except SystemExit:
+        _ok3b = True
+    except Exception:
+        _ok3b = False
+    else:
+        _ok3b = False
+    check("split_entry_empty_pin_fails_closed", _ok3b)
     try:
         _hdr = _g._review_header("z-ai/glm-5.3-flash", {"total_tokens": 7}, "BaseTen", 0, ["a.py"])
         _ok2 = (_hdr.startswith("model: z-ai/glm-5.3-flash | provider: BaseTen | usage: {'total_tokens': 7} | scrubbed: 0"
@@ -254,6 +455,7 @@ def main():
     # 12. OVERRIDE provenance: the note carries the reason, for the matching commit only
     open(os.path.join(tmp, "ov.py"), "w").write("y = 2\n")
     git(tmp, "add", "ov.py")
+    gate(tmp, "run")                     # a denial first: the override must adjudicate it
     open(os.path.join(tmp, ".adversary", "OVERRIDE"), "w").write("owner emergency")
     r = git(tmp, "commit", "-m", "override commit", expect_ok=False)
     check("override_commit_ok", r.returncode == 0, (r.stderr + r.stdout)[:150])
@@ -262,6 +464,58 @@ def main():
     data = json.loads(note.stdout) if note.returncode == 0 else {}
     check("override_note", r.returncode == 0 and data.get("type") == "OVERRIDE"
           and "owner emergency" in data.get("reason", ""), (r.stderr or note.stderr)[:150])
+    # 12b. the override's denial cycle RECORDS (gate round 2, 2026-09-21): the episode
+    # lands in adjudications.json with the `overridden` outcome - end-to-end through
+    # the real cmd_record branch, not a direct _adjudicate_cycle call.
+    adjp = os.path.join(tmp, ".adversary", "adjudications.json")
+    ov_head = git(tmp, "rev-parse", "HEAD").stdout.strip()
+    try:
+        eps_ov = json.loads(open(adjp, encoding="utf-8").read())["episodes"]
+    except (OSError, ValueError, KeyError):
+        eps_ov = []
+    ep_ov = next((e for e in eps_ov if e.get("commit") == ov_head), None)
+    check("override_adjudication_records_end_to_end",
+          ep_ov is not None and ep_ov["type"] == "OVERRIDE"
+          and set(ep_ov["outcome_counts"]) == {"overridden"},
+          "ep=%s" % (ep_ov or {}).get("outcome_counts"))
+    # 12c. the cycle floor falls back to the PARENT COMMIT's time when the parent
+    # carries no notary note (a bypassed commit - exactly row 11's shape): the
+    # stale-denial bound must never silently vanish (gate round 4, 2026-09-21).
+    cwd0 = os.getcwd()
+    os.chdir(tmp)                # gate functions resolve the repo from the cwd
+    try:
+        floor = _g._cycle_floor(ov_head, "refs/notes/adversary")
+    finally:
+        os.chdir(cwd0)
+    pc = git(tmp, "log", "-1", "--date=iso-local", "--format=%cd",
+             ov_head + "~1").stdout.strip()
+    want = pc[:10].replace("-", "") + "-" + pc[11:19].replace(":", "")
+    check("adjudication_cycle_floor_falls_back_to_parent_commit_time",
+          floor == want, "floor=%r want=%r" % (floor, want))
+    # 12d. the floor PREFERS the parent note's clearing-round timestamps over its
+    # top-level record time (round 5 F1): no child denial can predate the parent's
+    # clear, and second granularity compares with >= downstream.
+    open(os.path.join(tmp, "fl.py"), "w").write("f = 1\n")
+    git(tmp, "add", "fl.py")
+    git(tmp, "commit", "--no-verify", "-q", "-m", "floor fixture parent")
+    fp = git(tmp, "rev-parse", "HEAD").stdout.strip()
+    with open(os.path.join(tmp, "n.tmp"), "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "CLEAR", "when": "20260921-190000",
+                             "files": {"ov.py": {"when": "20260921-185500"}}}))
+    git(tmp, "notes", "--ref", "refs/notes/adversary", "add", "-F", "n.tmp", fp)
+    os.remove(os.path.join(tmp, "n.tmp"))
+    open(os.path.join(tmp, "fl2.py"), "w").write("g = 2\n")
+    git(tmp, "add", "fl2.py")
+    git(tmp, "commit", "--no-verify", "-q", "-m", "floor fixture child")
+    cwd1 = os.getcwd()
+    os.chdir(tmp)
+    try:
+        floor2 = _g._cycle_floor(git(tmp, "rev-parse", "HEAD").stdout.strip(),
+                                 "refs/notes/adversary")
+    finally:
+        os.chdir(cwd1)
+    check("adjudication_floor_prefers_clearing_round_when",
+          floor2 == "20260921-185500", "floor2=%r" % floor2)
 
     # 13. a stale override_used.json cannot bless a DIFFERENT commit
     open(os.path.join(tmp, ".adversary", "override_used.json"), "w").write(
@@ -1363,6 +1617,730 @@ def main():
     check("push_audit_floor_still_refuses_a_literal_planted_inside_a_binary",
           any(h[1] == "cred.bin" for h in hard3) and docs3.strip() == "",
           "hard %s docs %d" % (hard3[:2], len(docs3)))
+
+    # --- true-rate adjudication recording (owner order 2026-09-21): the recording must
+    # classify every finding of a commit's INITIAL denial - fixed / rebutted-upheld /
+    # rebutted-rejected / cleared-unedited / overridden / indeterminate - from evidence
+    # the gate itself holds (review artifacts + the staged-shas sidecar + clearance rows).
+    tmp3 = tempfile.mkdtemp(prefix="advadj_")
+    rvw3 = os.path.join(tmp3, ".adversary", "reviews")
+    os.makedirs(rvw3, exist_ok=True)
+
+    def _adj_art(name, files, verdict, findings_text):
+        hdr = ("model: m | provider: p | usage: 1 | scrubbed: 0 | files: %s | caller: fixture-agent\n\n"
+               % (files,))          # EXACTLY _review_header's list-repr shape, NEW
+                                      # format incl. the trailing caller field (the
+                                      # gate catch gate_20260923-182445: fixtures must
+                                      # mirror the real header or the files-regex
+                                      # regression ships uncovered)
+        with open(os.path.join(rvw3, name), "w", encoding="utf-8") as fh:
+            fh.write(hdr + findings_text + "\nVERDICT: %s\n" % verdict)
+
+    FIND = ("1. HIGH app.py:12 - off-by-one drops the last allocation slot.\n\n"
+            "2. MEDIUM app.py:40 - close() races the retry loop.\n\n"
+            "3. LOW - the second stage drops the lock twice.")
+
+    def _adj_fixture(denial_name, denial_shas, later=None, sidecar=None, consumed=None):
+        for f in os.listdir(rvw3):
+            os.remove(os.path.join(rvw3, f))
+        for f in os.listdir(os.path.join(tmp3, ".adversary")):
+            if f != "reviews":
+                os.remove(os.path.join(tmp3, ".adversary", f))
+        _adj_art(denial_name, ["app.py", "lib/util.py"], "BLOCK", FIND)
+        if later:
+            for nm, vd, fl in later:
+                _adj_art(nm, fl, vd, "")
+        if sidecar is not None:
+            with open(os.path.join(rvw3, "staged_shas.json"), "w", encoding="utf-8") as fh:
+                json.dump(sidecar, fh)
+        if consumed is not None:
+            with open(os.path.join(tmp3, ".adversary", "adjudications.json"), "w",
+                      encoding="utf-8") as fh:
+                json.dump({"version": 1, "episodes": (
+                    [{"commit": "c0", "denial_artifact": "reviews/" + denial_name,
+                      "rounds": ["reviews/" + denial_name], "findings": []}]
+                    if consumed else [])}, fh)
+
+    CHANGED = {"app.py": "shaB"}
+    CLEAR_B = {"app.py": {"sha": "shaB", "verdict": "CLEAR",
+                          "artifact": "reviews/gate_20260921-100500.md"}}
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["app.py"])],
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaA"},
+                                                      "rebuttal": False},
+                          "gate_20260921-100500.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c1", CHANGED, CLEAR_B, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_fixed_on_edit",
+          ep is not None and outs.get("F1") == "fixed" and outs.get("F3") == "fixed"
+          and ep["denial_artifact"] == "reviews/gate_20260921-100000.md",
+          "ep=%s outs=%s" % (bool(ep), outs))
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["app.py"])],
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False},
+                          "gate_20260921-100500.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": True}})
+    ep = _g._adjudicate_cycle(tmp3, "c2", CHANGED, CLEAR_B, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_rebuttal_upheld",
+          ep is not None and set(outs.values()) == {"rebutted-upheld"}, "outs=%s" % outs)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["app.py"])],
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False},
+                          "gate_20260921-100500.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c3", CHANGED, CLEAR_B, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_cleared_unedited",
+          ep is not None and set(outs.values()) == {"cleared-unedited"}, "outs=%s" % outs)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100300.md", "BLOCK", ["app.py"]),
+                        ("gate_20260921-100500.md", "CLEAR", ["app.py"])],
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaA"},
+                                                      "rebuttal": False},
+                          "gate_20260921-100300.md": {"staged": {"app.py": "shaA"},
+                                                      "rebuttal": True},
+                          "gate_20260921-100500.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c4", CHANGED, CLEAR_B, "CLEAR")
+    f1 = next((f for f in (ep or {}).get("findings", []) if f["id"] == "F1"), {})
+    check("adjudication_rebuttal_rejected_flag",
+          ep is not None and f1.get("outcome") == "fixed" and f1.get("rebuttal_rejected"),
+          "f1=%s" % f1)
+
+    ep = _g._adjudicate_cycle(tmp3, "c5", CHANGED, CLEAR_B, "OVERRIDE")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_overridden",
+          ep is not None and set(outs.values()) == {"overridden"}, "outs=%s" % outs)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["app.py"])])
+    ep = _g._adjudicate_cycle(tmp3, "c6", CHANGED, CLEAR_B, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_indeterminate_without_sidecar",
+          ep is not None and set(outs.values()) == {"indeterminate"}, "outs=%s" % outs)
+
+    _adj_fixture("gate_20260921-100000.md", None, consumed=True)
+    check("adjudication_dedupes_consumed_artifacts",
+          _g._adjudicate_cycle(tmp3, "c7", CHANGED, CLEAR_B, "CLEAR") is None)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["app.py"])])
+    for f in os.listdir(rvw3):                # wipe EVERY round, then stage a lone CLEAR
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    _adj_art("gate_20260921-100500.md", ["app.py"], "CLEAR", "")
+    check("adjudication_none_without_denial",
+          _g._adjudicate_cycle(tmp3, "c8", CHANGED, CLEAR_B, "CLEAR") is None)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaA"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c9", CHANGED, {}, "CLEAR")
+    _g._append_adjudication(tmp3, ep)
+    _g._append_adjudication(tmp3, ep)
+    with open(os.path.join(tmp3, ".adversary", "adjudications.json"), encoding="utf-8") as fh:
+        eps9 = json.load(fh)["episodes"]
+    check("adjudication_append_is_idempotent",
+          len(eps9) == 1 and eps9[0]["commit"] == "c9",
+          "episodes=%d" % len(eps9))
+
+    for f in os.listdir(rvw3):
+        os.remove(os.path.join(rvw3, f))
+    a1 = _g._write_review_round(tmp3, "20260921-110000",
+                                "model: m | provider: p | usage: 1 | scrubbed: 0 | "
+                                "files: %s\n\nok\nVERDICT: CLEAR\n" % (["app.py"],),
+                                {"app.py": "shaZ"}, True)
+    a2 = _g._write_review_round(tmp3, "20260921-110000",
+                                "model: m | provider: p | usage: 1 | scrubbed: 0 | "
+                                "files: %s\n\nok\nVERDICT: CLEAR\n" % (["app.py"],),
+                                {"app.py": "shaZ"}, False)
+    with open(os.path.join(rvw3, "staged_shas.json"), encoding="utf-8") as fh:
+        sc = json.load(fh)
+    check("adjudication_artifact_and_sidecar_atomic_pair",
+          os.path.basename(a1) != os.path.basename(a2)
+          and os.path.isfile(a1) and os.path.isfile(a2)
+          and sc.get(os.path.basename(a1)) == {"staged": {"app.py": "shaZ"},
+                                               "rebuttal": True}
+          and sc.get(os.path.basename(a2)) == {"staged": {"app.py": "shaZ"},
+                                               "rebuttal": False},
+          "a1=%s a2=%s sidecar=%s" % (os.path.basename(a1), os.path.basename(a2), sc))
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100300.md", "BLOCK", ["app.py"]),
+                        ("gate_20260921-100500.md", "CLEAR", ["app.py"])],
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False},
+                          "gate_20260921-100300.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": True},
+                          "gate_20260921-100500.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c10", CHANGED, CLEAR_B, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_rejected_rebuttal_not_upheld",
+          ep is not None and set(outs.values()) == {"cleared-unedited"}
+          and all(f["rebuttal_rejected"] for f in ep["findings"]),
+          "outs=%s" % outs)
+
+    _adj_fixture("gate_20260900-090000.md", None,          # weeks-old abandoned denial
+                 later=[("gate_20260921-100000.md", "BLOCK", ["app.py"]),
+                        ("gate_20260921-100500.md", "CLEAR", ["app.py"])],
+                 sidecar={"gate_20260900-090000.md": {"staged": {"app.py": "shaOLD"},
+                                                      "rebuttal": False},
+                          "gate_20260921-100000.md": {"staged": {"app.py": "shaA"},
+                                                      "rebuttal": False},
+                          "gate_20260921-100500.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c11", CHANGED, CLEAR_B, "CLEAR",
+                              after="20260921-093000")
+    check("adjudication_stale_denial_excluded_by_prev_commit",
+          ep is not None and ep["denial_artifact"] == "reviews/gate_20260921-100000.md",
+          "denial=%s" % (ep or {}).get("denial_artifact"))
+
+    for f in os.listdir(rvw3):
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    with open(os.path.join(rvw3, "gate_20260921-120000.md"), "w", encoding="utf-8") as fh:
+        fh.write("model: m | provider: p | usage: 1 | scrubbed: 0 | files: %s\n\n"
+                 % (["app.py"],)
+                 + "prose quoting VERDICT: BLOCK mid-review\n\nVERDICT: CLEAR\n")
+    check("adjudication_verdict_last_line_wins",
+          _g._adjudicate_cycle(tmp3, "c12", CHANGED, CLEAR_B, "CLEAR") is None)
+
+    for f in os.listdir(rvw3):
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    _adj_art("gate_20260921-130000.md", [], "BLOCK",
+             "1. HIGH D:gone.py - the deleted module still had callers.")
+    CHANGED_RM = {"D:gone.py": "shaG"}
+    with open(os.path.join(rvw3, "staged_shas.json"), "w", encoding="utf-8") as fh:
+        json.dump({"gate_20260921-130000.md": {"staged": {"D:gone.py": "shaH"},
+                                               "rebuttal": False}}, fh)
+    ep = _g._adjudicate_cycle(tmp3, "c13", CHANGED_RM, {"D:gone.py": {
+        "sha": "shaG", "verdict": "CLEAR", "artifact": "reviews/gate_20260921-130500.md"}},
+        "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_removals_only_denial",
+          ep is not None and set(outs.values()) == {"fixed"}, "outs=%s" % outs)
+
+    for f in os.listdir(rvw3):
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    _adj_art("gate_20260921-140000.md", ["app.py"], "BLOCK",
+             "1. HIGH app.py:12 - off-by-one drops the last slot.\n\n"
+             "2. The retry loop may follow stale state and lose the write.")
+    with open(os.path.join(rvw3, "staged_shas.json"), "w", encoding="utf-8") as fh:
+        json.dump({"gate_20260921-140000.md": {"staged": {"app.py": "shaA"},
+                                               "rebuttal": False}}, fh)
+    ep = _g._adjudicate_cycle(tmp3, "c14", CHANGED, CLEAR_B, "CLEAR")
+    check("adjudication_severity_word_boundary",
+          ep is not None and len(ep["findings"]) == 1
+          and ep["findings"][0]["outcome"] == "fixed",
+          "findings=%s" % (ep or {}).get("findings"))
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaA"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c15", {"D:app.py": "sha0"}, {}, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_delete_remediation_is_fixed",
+          ep is not None and set(outs.values()) == {"fixed"}, "outs=%s" % outs)
+
+    for f in os.listdir(rvw3):
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    _adj_art("gate_20260921-150000.md", ["app.py"], "CLEAR",
+             "1. HIGH app.py:12 - boom.\n\nVERDICT: BLOCK\n\nVERDICT: CLEAR")
+    ep = _g._adjudicate_cycle(tmp3, "c16", CHANGED, CLEAR_B, "CLEAR")
+    check("adjudication_conflicting_verdicts_count_as_denial", ep is not None)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["app.py"])],
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c17", CHANGED, CLEAR_B, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_clearing_without_sidecar_is_indeterminate",
+          ep is not None and set(outs.values()) == {"indeterminate"},
+          "outs=%s" % outs)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["a.py"]),
+                        ("gate_20260921-100600.md", "CLEAR", ["b.py"])])
+    for f in os.listdir(rvw3):                   # rebuild the denial two-file body
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    _adj_art("gate_20260921-100000.md", ["a.py", "b.py"], "BLOCK",
+             "1. HIGH a.py:1 - the allocator drops the tail.\n\n"
+             "2. MEDIUM b.py:2 - the retry loop re-enters.")
+    _adj_art("gate_20260921-100500.md", ["a.py"], "CLEAR", "")
+    _adj_art("gate_20260921-100600.md", ["b.py"], "CLEAR", "")
+    with open(os.path.join(rvw3, "staged_shas.json"), "w", encoding="utf-8") as fh:
+        json.dump({"gate_20260921-100000.md": {"staged": {"a.py": "shaA",
+                                                          "b.py": "shaB"},
+                                               "rebuttal": False},
+                   "gate_20260921-100500.md": {"staged": {"a.py": "shaA"},
+                                               "rebuttal": False},
+                   "gate_20260921-100600.md": {"staged": {"b.py": "shaB"},
+                                               "rebuttal": True}}, fh)
+    CLEAR_TWO = {"a.py": {"sha": "shaA", "verdict": "CLEAR",
+                          "artifact": "reviews/gate_20260921-100500.md"},
+                 "b.py": {"sha": "shaB", "verdict": "CLEAR",
+                          "artifact": "reviews/gate_20260921-100600.md"}}
+    ep = _g._adjudicate_cycle(tmp3, "c18", {"a.py": "shaA", "b.py": "shaB"},
+                              CLEAR_TWO, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_per_finding_upheld",
+          ep is not None and outs.get("F1") == "cleared-unedited"
+          and outs.get("F2") == "rebutted-upheld", "outs=%s" % outs)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["app.py"])],
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False},
+                          "gate_20260921-100500.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c19", CHANGED,
+                              {"app.py": {"sha": "shaB", "verdict": "CLEAR",
+                                          "artifact": "reviews/gate_20260921-100500.md"}},
+                              "CLEAR", after="20260921-100000")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_same_second_denial_included",
+          ep is not None and set(outs.values()) == {"cleared-unedited"},
+          "outs=%s" % outs)
+    ep = _g._adjudicate_cycle(tmp3, "c20", CHANGED,
+                              {"app.py": {"sha": "shaB", "verdict": "CLEAR"}},
+                              "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_no_clearing_artifact_is_indeterminate",
+          ep is not None and set(outs.values()) == {"indeterminate"},
+          "outs=%s" % outs)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["util.py", "x_util.py"])])
+    for f in os.listdir(rvw3):
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    _adj_art("gate_20260921-100000.md", ["util.py", "x_util.py"], "BLOCK",
+             "1. HIGH x_util.py:9 - the wrapper leaks its handle.")
+    _adj_art("gate_20260921-100500.md", ["util.py", "x_util.py"], "CLEAR", "")
+    with open(os.path.join(rvw3, "staged_shas.json"), "w", encoding="utf-8") as fh:
+        json.dump({"gate_20260921-100000.md": {"staged": {"util.py": "shaU",
+                                                          "x_util.py": "shaX"},
+                                               "rebuttal": False},
+                   "gate_20260921-100500.md": {"staged": {"util.py": "shaU2",
+                                                          "x_util.py": "shaX"},
+                                               "rebuttal": False}}, fh)
+    CLEAR_TOK = {"util.py": {"sha": "shaU2", "verdict": "CLEAR",
+                             "artifact": "reviews/gate_20260921-100500.md"},
+                 "x_util.py": {"sha": "shaX", "verdict": "CLEAR",
+                               "artifact": "reviews/gate_20260921-100500.md"}}
+    ep = _g._adjudicate_cycle(tmp3, "c21", {"util.py": "shaU2", "x_util.py": "shaX"},
+                              CLEAR_TOK, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_token_citation_no_substring",
+          ep is not None and outs.get("F1") == "cleared-unedited"
+          and ep["findings"][0]["files"] == ["x_util.py"],
+          "outs=%s" % outs)
+
+    for f in os.listdir(rvw3):
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    with open(os.path.join(rvw3, "gate_20260921-160000.md"), "w",
+              encoding="utf-8") as fh:      # NO files: header - a parse miss
+        fh.write("1. HIGH gone.py - broken.\n\nVERDICT: BLOCK\n")
+    check("adjudication_unparsed_header_not_adopted_by_removals",
+          _g._adjudicate_cycle(tmp3, "c22", {"D:gone.py": "shaG"}, {}, "CLEAR") is None)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100000-2.md", "BLOCK", ["app.py"]),
+                        ("gate_20260921-100500.md", "CLEAR", ["app.py"])],
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False},
+                          "gate_20260921-100000-2.md": {"staged": {"app.py": "shaB"},
+                                                        "rebuttal": False},
+                          "gate_20260921-100500.md": {"staged": {"app.py": "shaB"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c23", CHANGED, CLEAR_B, "CLEAR",
+                              after="20260921-100000")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_suffixed_same_second_denial_included",
+          ep is not None and set(outs.values()) == {"cleared-unedited"}
+          and ep["denial_artifact"] == "reviews/gate_20260921-100000.md",
+          "denial=%s outs=%s" % ((ep or {}).get("denial_artifact"), outs))
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["app.py"])])
+    for f in os.listdir(rvw3):
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    _adj_art("gate_20260921-100000.md", ["app.py"], "BLOCK",
+             "1. HIGH app.py:12. - the loop drops the tail element.")
+    _adj_art("gate_20260921-100500.md", ["app.py"], "CLEAR", "")
+    with open(os.path.join(rvw3, "staged_shas.json"), "w", encoding="utf-8") as fh:
+        json.dump({"gate_20260921-100000.md": {"staged": {"app.py": "shaB"},
+                                               "rebuttal": False},
+                   "gate_20260921-100500.md": {"staged": {"app.py": "shaB"},
+                                               "rebuttal": False}}, fh)
+    ep = _g._adjudicate_cycle(tmp3, "c24", CHANGED, CLEAR_B, "CLEAR")
+    f1 = next((f for f in (ep or {}).get("findings", [])), {})
+    check("adjudication_period_citation",
+          ep is not None and f1.get("files") == ["app.py"]
+          and f1.get("outcome") == "cleared-unedited", "f1=%s" % f1)
+
+    _adj_fixture("gate_20260921-100000.md", None)
+    for f in os.listdir(rvw3):
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    _adj_art("gate_20260921-100000.md", ["m.py"], "BLOCK",
+             "1. HIGH m.py:3 - the mixed round leaves a dangling removal.")
+    with open(os.path.join(rvw3, "staged_shas.json"), "w", encoding="utf-8") as fh:
+        json.dump({"gate_20260921-100000.md": {"staged": {"m.py": "s1",
+                                                          "D:del.py": "s2"},
+                                               "rebuttal": False}}, fh)
+    ep = _g._adjudicate_cycle(tmp3, "c25", {"D:del.py": "shaNEW"}, {}, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_mixed_round_removal_touch",
+          ep is not None and set(outs.values()) == {"fixed"}, "outs=%s" % outs)
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["app.py"])])
+    for f in os.listdir(rvw3):
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    with open(os.path.join(rvw3, "gate_20260921-170000.md"), "w",
+              encoding="utf-8") as fh:
+        fh.write("model: m | provider: p | usage: 1 | scrubbed: 0 | files: %s\n\n"
+                 % (["app.py"],)
+                 + "1. HIGH app.py:1 - lowercase marker.\n\nverdict: block\n")
+    ep = _g._adjudicate_cycle(tmp3, "c26", CHANGED, CLEAR_B, "CLEAR")
+    check("adjudication_lowercase_verdict_is_a_denial", ep is not None)
+
+    adjp3 = os.path.join(tmp3, ".adversary", "adjudications.json")
+    if os.path.isfile(adjp3):
+        os.remove(adjp3)
+    _adj_fixture("gate_20260921-100000.md", None,
+                 sidecar={"gate_20260921-100000.md": {"staged": {"app.py": "shaA"},
+                                                      "rebuttal": False}})
+    ep = _g._adjudicate_cycle(tmp3, "c27", CHANGED, {}, "CLEAR")
+    orig_lock = _g._adv_lock            # busy lock stubbed: the F3 contract under
+    _g._adv_lock = lambda adv, name, deadline_s=10: None   # test is _append's
+    try:                                # None-handling, not the 10 s stall itself
+        busy = _g._append_adjudication(tmp3, ep)
+    finally:
+        _g._adv_lock = orig_lock
+    persisted = _g._append_adjudication(tmp3, ep)
+    with open(adjp3, encoding="utf-8") as fh:
+        eps27 = json.load(fh)["episodes"]
+    check("adjudication_append_reports_persistence",
+          busy is False and persisted is True and len(eps27) == 1,
+          "busy=%s persisted=%s eps=%d" % (busy, persisted, len(eps27)))
+
+    _adj_fixture("gate_20260921-100000.md", None,
+                 later=[("gate_20260921-100500.md", "CLEAR", ["app.py"])])
+    for f in os.listdir(rvw3):
+        if f.startswith("gate_"):
+            os.remove(os.path.join(rvw3, f))
+    _adj_art("gate_20260921-100000.md", ["app.py", "ghost.py"], "BLOCK",
+             "1. HIGH ghost.py:7 - the uncited path leaks.")
+    _adj_art("gate_20260921-100500.md", ["app.py"], "CLEAR", "")
+    _adj_art("gate_20260921-090000.md", ["ghost.py"], "CLEAR", "")   # a STALE older
+    with open(os.path.join(rvw3, "staged_shas.json"), "w", encoding="utf-8") as fh:
+        json.dump({"gate_20260921-100000.md": {"staged": {"app.py": "shaB",
+                                                          "ghost.py": "shaX"},
+                                               "rebuttal": False},
+                   "gate_20260921-100500.md": {"staged": {"app.py": "shaB"},
+                                               "rebuttal": False},
+                   "gate_20260921-090000.md": {"staged": {"ghost.py": "shaX"},
+                                               "rebuttal": True}}, fh)
+    CLEAR_STALE = {"app.py": {"sha": "shaB", "verdict": "CLEAR",
+                              "artifact": "reviews/gate_20260921-100500.md"},
+                   "ghost.py": {"sha": "shaX", "verdict": "CLEAR",
+                                "artifact": "reviews/gate_20260921-090000.md"}}
+    ep = _g._adjudicate_cycle(tmp3, "c28", CHANGED, CLEAR_STALE, "CLEAR")
+    outs = {f["id"]: f["outcome"] for f in (ep or {}).get("findings", [])}
+    check("adjudication_stale_cited_clearance_ignored",
+          ep is not None and set(outs.values()) == {"cleared-unedited"}
+          # the NEW header format (trailing caller field) must parse cleanly:
+          # no file name carries the leaked caller text, and the episode
+          # carries the denial's caller (gate catch gate_20260923-182445 net)
+          and all(" " not in f and "|" not in f and "caller" not in f
+                  for fl in (ep or {}).get("findings", [])
+                  for f in fl.get("files", []))
+          and ep.get("caller") == "fixture-agent",
+          "outs=%s caller=%s" % (outs, (ep or {}).get("caller")))
+
+    # Workload routing + Jev typed-decision refinement (owner order 2026-09-23,
+    # typesafe/jev-1.13): the deterministic floor promotes the deepseek-v4-pro-0813
+    # rung to PRIMARY for cache-heavy workloads (payload >= threshold - those pins
+    # are the proven cache-readers - or a rebuttal round, where the stable-first
+    # prefix repeats). Jev sees METRICS ONLY (counts, never staged bytes) and may
+    # only ADD promotions in the gray zone; it can never demote the rule, forge a
+    # verdict, or touch secrets/push barriers. Every failure is fail-open.
+    _RC = _g.DEFAULT_CHAIN
+    _saved_env = {k: os.environ.get(k) for k in
+                  ("OPENROUTER_API_KEY", "ADVERSARY_JEV_OFF", "ADVERSARY_JEV_FAKE",
+                   "ADVERSARY_PROMOTE_OFF", "ADVERSARY_PROMOTE_MIN_CHARS")}
+    try:
+        for _k in _saved_env:
+            os.environ.pop(_k, None)
+        # Without opt-in, every workload preserves the owner's primary/secondary.
+        for _payload, _context in (("small", ""), ("x" * 900000, ""), ("small", "REBUT")):
+            _fixed = _g._route_chain(_RC, _payload, _context)
+            check("route_fixed_default_" + str(len(_payload)) + "_" + str(bool(_context)),
+                  _fixed == (_RC, "off"), str(_fixed)[:200])
+        # Preserve coverage of the explicitly enabled legacy router.
+        os.environ["ADVERSARY_PROMOTE_OFF"] = "0"
+        try:
+            _ro = _g._route_chain(_RC, "x" * (_g.PROMOTE_MIN_CHARS + 1), "")
+            _ok_ro = (_ro[1] == "rule"
+                      and _ro[0].split(",")[0].startswith("deepseek/deepseek-v4-pro-0813@")
+                      and len(_ro[0].split(",")) == len(_RC.split(",")))
+        except Exception as _e:                                 # noqa: BLE001
+            _ok_ro, _ro = False, repr(_e)
+        check("route_promotes_deepseek_on_large_payload", _ok_ro, str(_ro)[:200])
+
+        try:
+            _rb = _g._route_chain(_RC, "small", "REBUT: the finding misread the bytes")
+            _ok_rb = (_rb[1] == "rule" and _rb[0].split(",")[0].startswith("deepseek/"))
+        except Exception as _e:                                 # noqa: BLE001
+            _ok_rb, _rb = False, repr(_e)
+        check("route_promotes_deepseek_on_rebuttal_round", _ok_rb, str(_rb)[:200])
+
+        try:
+            _rd = _g._route_chain(_RC, "small", "")
+            _ok_rd = (_rd == (_RC, "default"))
+        except Exception as _e:                                 # noqa: BLE001
+            _ok_rd, _rd = False, repr(_e)
+        check("route_default_below_threshold_first_round", _ok_rd, str(_rd)[:200])
+
+        try:
+            _lst0 = _RC.split(",")
+            _rp = _g._route_chain(_RC, "x" * (_g.PROMOTE_MIN_CHARS + 1), "")
+            _lst1 = _rp[0].split(",")
+            _ok_rp = (sorted(_lst0) == sorted(_lst1) and _lst1[0] == _lst0[2]
+                      and _g._route_chain(_rp[0], "y" * (_g.PROMOTE_MIN_CHARS + 2), "")[0]
+                      == _rp[0])
+        except Exception as _e:                                 # noqa: BLE001
+            _ok_rp, _rp = False, repr(_e)
+        check("route_preserves_order_no_dupes_idempotent", _ok_rp, str(_rp)[:200])
+
+        _rm = _g._route_chain("z-ai/glm-5.3-flash@parasail/fp8", "x" * 900000, "R")
+        check("route_manual_model_override_bypasses",
+              _rm == ("z-ai/glm-5.3-flash@parasail/fp8", "manual"), str(_rm)[:200])
+        os.environ["ADVERSARY_PROMOTE_OFF"] = "1"
+        _rk = _g._route_chain(_RC, "x" * (_g.PROMOTE_MIN_CHARS + 1), "R")
+        check("route_killswitch_returns_verbatim", _rk == (_RC, "off"), str(_rk)[:200])
+        os.environ["ADVERSARY_PROMOTE_OFF"] = "0"
+        _no_ds = "openai/gpt-6-luna-pro,z-ai/glm-5.3-flash@parasail/fp8"
+        _prev_dc = _g.DEFAULT_CHAIN
+        try:
+            _g.DEFAULT_CHAIN = _no_ds        # the absent-target branch is reachable
+            _ra = _g._route_chain(_no_ds, "x" * (_g.PROMOTE_MIN_CHARS + 1), "R")
+        finally:                              # only with the DEFAULT itself patched
+            _g.DEFAULT_CHAIN = _prev_dc
+        check("route_absent_target_unchanged", _ra == (_no_ds, "default"), str(_ra)[:200])
+
+        # Jev consult rides the OpenRouter DECISIONS API (/api/alpha/decisions, the
+        # gate's OWN OPENROUTER_API_KEY - wire contract LIVE-verified 2026-09-23:
+        # unwrapped {model, state, questions} body, criteria-shaped questions,
+        # answers.<qid> = {type, choice, probabilities, confidence}). Absent key
+        # -> None fast; SELFTEST serves only ADVERSARY_JEV_FAKE shaped like a REAL
+        # answer; garbage fails open; the gray zone can promote; the rule is never
+        # demoted; ADVERSARY_JEV_OFF skips entirely.
+        check("jev_failopen_without_key", _g._jev_decide(1234, False, 5) is None,
+              "expected None with no key and no fake")
+        os.environ["ADVERSARY_JEV_FAKE"] = ('{"promote_deepseek": {"type": "choice", '
+                                            '"choice": "deepseek_first", '
+                                            '"probabilities": {"default_order": 0.07, '
+                                            '"deepseek_first": 0.93}, "confidence": 0.93}}')
+        _jf = _g._jev_decide(1234, False, 5)
+        check("jev_fake_answers_honored_under_selftest",
+              isinstance(_jf, dict) and _jf.get("choice") == "deepseek_first"
+              and abs(_jf.get("probabilities", {}).get("deepseek_first", 0) - 0.93) < 1e-9,
+              str(_jf))
+        os.environ["ADVERSARY_JEV_FAKE"] = "not-json{{"
+        check("jev_malformed_answers_failopen", _g._jev_decide(1234, False, 5) is None,
+              "expected None on garbage")
+        check("jev_transport_targets_openrouter_decisions",
+              _g.JEV_API_URL == "https://openrouter.ai/api/alpha/decisions"
+              and _g.JEV_MODEL == "typesafe/jev-1.13",
+              "%s / %s" % (_g.JEV_API_URL, _g.JEV_MODEL))
+        try:
+            _jb = _g._jev_request_body("STATE")
+            _ok_jb = (_jb.get("model") == "typesafe/jev-1.13"
+                      and _jb.get("state") == "STATE"
+                      and set(_jb.get("questions", {})) == {"promote_deepseek"}
+                      and set(_jb["questions"]["promote_deepseek"]["criteria"])
+                      == {"default_order", "deepseek_first"}
+                      and "decisionsRequest" not in _jb)
+        except Exception as _e:                                 # noqa: BLE001
+            _ok_jb, _jb = False, repr(_e)
+        check("jev_request_shape_matches_live_contract", _ok_jb, str(_jb)[:300])
+        # the parse fixture is the EXACT shape the live 2026-09-23 probe returned
+        # (only the id is shortened); an out-of-vocabulary choice fails open
+        _live = {"model": "typesafe/jev-1.13-20260917",
+                 "answers": {"promote_deepseek": {"type": "choice",
+                                                  "choice": "default_order",
+                                                  "probabilities": {"default_order": 0.97,
+                                                                    "deepseek_first": 0.03},
+                                                  "confidence": 0.95}},
+                 "id": "gen-dec-probe", "provider": "TypeSafe"}
+        _jp = _g._jev_parse_answer(_live)
+        check("jev_answer_parse_live_shape",
+              _jp == {"choice": "default_order",
+                      "probabilities": {"default_order": 0.97, "deepseek_first": 0.03},
+                      "confidence": 0.95}
+              and _g._jev_parse_answer({"answers": {"promote_deepseek":
+                                                    {"type": "choice",
+                                                     "choice": "weird"}}}) is None,
+              str(_jp))
+        os.environ["ADVERSARY_JEV_FAKE"] = ('{"promote_deepseek": {"type": "choice", '
+                                            '"choice": "deepseek_first", '
+                                            '"probabilities": {"deepseek_first": 0.9}, '
+                                            '"confidence": 0.9}}')
+        _jg = _g._route_chain(_RC, "small", "")
+        _ok_jg = (_jg[1] == "jev" and _jg[0].split(",")[0].startswith("deepseek/"))
+        check("jev_promotes_only_in_gray_zone", _ok_jg, str(_jg)[:200])
+        os.environ["ADVERSARY_JEV_FAKE"] = ('{"promote_deepseek": {"type": "choice", '
+                                            '"choice": "default_order", '
+                                            '"probabilities": {"default_order": 0.99}, '
+                                            '"confidence": 0.99}}')
+        _jn = _g._route_chain(_RC, "x" * (_g.PROMOTE_MIN_CHARS + 1), "")
+        check("jev_never_demotes_deterministic_rule",
+              _jn[1] == "rule" and _jn[0].split(",")[0].startswith("deepseek/"),
+              str(_jn)[:200])
+        os.environ["ADVERSARY_JEV_OFF"] = "1"
+        _jo = _g._route_chain(_RC, "small", "")
+        check("jev_killswitch_skips_consult", _jo == (_RC, "default"), str(_jo)[:200])
+        os.environ.pop("ADVERSARY_JEV_OFF", None)
+        os.environ.pop("ADVERSARY_JEV_FAKE", None)
+        # a selftest with a REAL key set must still never touch the network
+        os.environ["OPENROUTER_API_KEY"] = "sk-selftest-never-real"
+        check("jev_selftest_hermetic_even_with_key", _g._jev_decide(1234, False, 5) is None,
+              "SELFTEST=1 with a key and no fake must consult nothing")
+    finally:
+        for _k, _v in _saved_env.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
+
+    # e2e: a large staged payload routes the chain deepseek-first AND still
+    # clears through the fake reviewer; a small one leaves the default order
+    # (no routing line at all)
+    tmpR = tempfile.mkdtemp(prefix="advgate_")
+    subprocess.run([GIT, "init", "-q", tmpR], capture_output=True)
+    git(tmpR, "config", "user.email", "t@t")
+    git(tmpR, "config", "user.name", "t")
+    with open(os.path.join(tmpR, "big.py"), "w", encoding="utf-8") as fh:
+        fh.write("X = \"" + "a" * 300 + "\"\n" * 40)
+    git(tmpR, "add", "big.py")
+    _e1 = gate(tmpR, "run", env_extra={"ADVERSARY_FAKE": "CLEAR",
+                                       "ADVERSARY_PROMOTE_OFF": "0",
+                                       "ADVERSARY_PROMOTE_MIN_CHARS": "100",
+                                       "ADVERSARY_JEV_OFF": "1"})
+    check("route_e2e_large_run_emits_routing_line",
+          _e1.returncode == 0 and "workload routing" in _e1.stdout
+          and "deepseek/deepseek-v4-pro-0813" in _e1.stdout,
+          "rc=%s out=%s err=%s" % (_e1.returncode, _e1.stdout[:200], _e1.stderr[-200:]))
+    _e2 = gate(tmpR, "run", env_extra={"ADVERSARY_FAKE": "CLEAR",
+                                       "ADVERSARY_PROMOTE_OFF": "0",
+                                       "ADVERSARY_PROMOTE_MIN_CHARS": "999999999",
+                                       "ADVERSARY_JEV_OFF": "1"})
+    check("route_e2e_small_run_no_routing_line",
+          _e2.returncode == 0 and "workload routing" not in _e2.stdout,
+          "rc=%s out=%s" % (_e2.returncode, _e2.stdout[:200]))
+
+    # Calling-agent attribution (owner order 2026-09-23: "record if we are not the
+    # calling agent for every scan ... error rate of each agent as well"): every
+    # review artifact carries caller: <id> - explicit ADVERSARY_CALLER env wins,
+    # then harness sniffing (CLAUDECODE=1 / ZCODE_APP_VERSION / CODEX_HOME),
+    # else unknown. Old artifacts simply lack the field.
+    _saved_caller_env = {k: os.environ.get(k) for k in
+                         ("ADVERSARY_CALLER", "CLAUDECODE", "ZCODE_APP_VERSION", "CODEX_HOME")}
+    try:
+        for _k in _saved_caller_env:
+            os.environ.pop(_k, None)
+        os.environ["ADVERSARY_CALLER"] = "test-agent"
+
+        def _latest_artifact(repo):
+            rvw = os.path.join(repo, ".adversary", "reviews")
+            cands = [f for f in os.listdir(rvw) if _g._GNAME_RE.fullmatch(f)]
+            def order(name):
+                match = _g._GNAME_RE.fullmatch(name)
+                return match.group(1), int(match.group(2) or 0)
+            return open(os.path.join(rvw, max(cands, key=order)), encoding="utf-8",
+                        errors="replace").read()[:400]
+
+        tmpC = tempfile.mkdtemp(prefix="advgate_")
+        subprocess.run([GIT, "init", "-q", tmpC], capture_output=True)
+        git(tmpC, "config", "user.email", "t@t")
+        git(tmpC, "config", "user.name", "t")
+        with open(os.path.join(tmpC, "a.py"), "w", encoding="utf-8") as fh:
+            fh.write("x = 1\n")
+        git(tmpC, "add", "a.py")
+        with tempfile.TemporaryDirectory(prefix="adv-latest-") as _lroot:
+            _lrvw = os.path.join(_lroot, ".adversary", "reviews")
+            os.makedirs(_lrvw)
+            for _lname, _ltext in (("gate_20260927-120000.md", "first"),
+                                    ("gate_20260927-120000-2.md", "second"),
+                                    ("gate_20260927-120000-10.md", "tenth")):
+                with open(os.path.join(_lrvw, _lname), "w", encoding="utf-8") as _lfh:
+                    _lfh.write(_ltext)
+            check("latest_artifact_uses_numeric_suffix", _latest_artifact(_lroot) == "tenth")
+
+        _c1 = gate(tmpC, "run", env_extra={"ADVERSARY_FAKE": "CLEAR",
+                                           "ADVERSARY_CALLER": "test-agent"})
+        _h1 = _latest_artifact(tmpC)
+        check("caller-recorded-in-artifact-header",
+              _c1.returncode == 0 and "caller: test-agent" in _h1, _h1[:200])
+        os.environ.pop("ADVERSARY_CALLER", None)
+        _c2 = gate(tmpC, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+        _h2 = _latest_artifact(tmpC)
+        check("caller-unknown-fallback",
+              _c2.returncode == 0 and "caller: unknown" in _h2, _h2[:200])
+        _c3 = gate(tmpC, "run", env_extra={"ADVERSARY_FAKE": "CLEAR",
+                                           "ZCODE_APP_VERSION": "9.9"})
+        _h3 = _latest_artifact(tmpC)
+        check("caller-env-sniff-zcode",
+              _c3.returncode == 0 and "caller: zcode" in _h3, _h3[:200])
+        # Exercise production header parsing and finding attribution, not a regex copy.
+        try:
+            with tempfile.TemporaryDirectory(prefix="adv-bracket-") as _br:
+                os.environ["ADVERSARY_CALLER"] = "fixture agent"
+                _bt = (_g._review_header("m", {}, "p", 0, ["we]ird.py"])
+                       + "1. HIGH we]ird.py:7 - a finding citing the bracket name.\n"
+                       + "VERDICT: BLOCK\n")
+                _g._write_review_round(_br, "20260921-100000", _bt,
+                                       {"we]ird.py": "old"}, False)
+                _clear_br = _g._write_review_round(
+                    _br, "20260921-100500", _bt.replace("VERDICT: BLOCK", "VERDICT: CLEAR"),
+                    {"we]ird.py": "new"}, False)
+                _ep_br = _g._adjudicate_cycle(
+                    _br, "bracket-commit", {"we]ird.py": "new"},
+                    {"we]ird.py": {"sha": "new", "verdict": "CLEAR",
+                                    "artifact": os.path.relpath(_clear_br, _br)}}, "CLEAR")
+                _bfiles = (_ep_br or {}).get("findings", [])
+                _ok_b = (bool(_bfiles) and _bfiles[0].get("files") == ["we]ird.py"]
+                         and _bfiles[0].get("outcome") == "fixed"
+                         and _ep_br.get("caller") == "fixture%20agent")
+        except Exception as _e:
+            _ok_b, _bfiles = False, repr(_e)
+        check("caller-header-bracket-name-survives", _ok_b, str(_bfiles))
+    finally:
+        for _k, _v in _saved_caller_env.items():
+            if _v is None:
+                os.environ.pop(_k, None)
+            else:
+                os.environ[_k] = _v
 
     bad = {k: v for k, v in results.items() if not v[0]}
     print("\n%d/%d PASS" % (len(results) - len(bad), len(results)))

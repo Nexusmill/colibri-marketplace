@@ -45,6 +45,7 @@ import sys
 import time
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 try:                                  # vendored beside this file: the docs half of the gate
     import docscan                    # (domain division 2026-09-03). Absent -> docs degrade.
@@ -85,18 +86,15 @@ XAI_API_URL = "https://api.x.ai/v1/responses"   # xAI-native backup (grok); diff
 # empty, cmd_run fails closed to BLOCK exactly as before. Owner ruling 2026-09-01:
 # glm-5.3-flash primary (similarly priced and it FINISHES). Owner ruling 2026-09-03:
 # grok-4.6 (xAI-native - an `xai:` prefix routes a chain entry to api.x.ai, NOT OpenRouter)
-# takes the SECOND/backup spot, replacing deepseek-v4-flash (which emptied on heavy
-# payloads); its strength backstops glm on the payloads that exhaust a flash model.
-# Owner ruling 2026-09-16 (31 live runs of this gate's own PROMPT against planted defects,
-# fleet docs/design/2026-09-16-provider-pins.md): deepseek-v4-flash RETURNS as the middle
-# entry, PINNED to the two OpenRouter endpoints that completed every run - the 2026-09-03
-# emptying was one provider's behaviour (DeepInfra served it with no reasoning and missed a
-# planted defect). A chain entry `model@tag1+tag2` pins provider.order to those endpoint
-# tags, in that order, with fallbacks OFF; an entry whose pinned endpoints are all down
-# gets an error payload, which advances the chain like any transport failure. glm stays
-# primary and unpinned (a 30k-reasoning-token review needs its fast providers); grok is the
-# last chance. ADVERSARY_MODEL / --model still override the whole chain.
-DEFAULT_CHAIN = "z-ai/glm-5.3-flash,deepseek/deepseek-v4-flash@open-inference/fp8+gmicloud/fp8,xai:grok-4.6"
+# Owner order 2026-09-26: Luna Pro primary, Qwen Flash secondary; MiMo removed.
+# Keep the remaining fallback order and measured provider pins. New models are
+# unpinned (no measured/owner-approved endpoint pins). fleet_selftest validates
+# parity with GATE_LADDER and the live catalog. Explicit overrides still win.
+DEFAULT_CHAIN = ("openai/gpt-6-luna-pro,"
+                 "qwen/qwen3.8-flash,"
+                 "deepseek/deepseek-v4-pro-0813@deepinfra/fp8+wafer+ionstream,"
+                 "z-ai/glm-5.3-flash@parasail/fp8+coreweave/nvfp4+modal/fp8,"
+                 "deepseek/deepseek-v4-flash@open-inference/fp8+deepinfra/fp8")
 DEFAULT_MODEL = os.environ.get("ADVERSARY_MODEL", DEFAULT_CHAIN)
 MAX_FILE_BYTES = 250_000          # per staged file included in full
 MAX_TOTAL_BYTES = 900_000         # whole prompt budget (hy3 ctx 262k tokens)
@@ -937,6 +935,161 @@ def _split_entry(entry):
     return model.strip(), order
 
 
+# ---- Workload routing (owner order 2026-09-23, typesafe/jev-1.13 workflow) ---------------
+# Legacy routing is opt-in (ADVERSARY_PROMOTE_OFF=0) as of 2026-09-26.
+# The default preserves the owner-selected primary/secondary for every workload.
+# WHEN deepseek leads: the deterministic floor below needs no key and no network -
+# it promotes the deepseek-v4-pro-0813 rung to PRIMARY for cache-heavy workloads
+# (payload >= ADVERSARY_PROMOTE_MIN_CHARS: those pins are the measured cache-readers,
+# fleet_probe 2026-09-23 2560/2699-token readbacks; or a rebuttal round: the
+# stable-first payload prefix repeats, so cached input is the cheap input). Jev
+# (typesafe/jev-1.13, a TYPED-DECISION model - it returns choices/probabilities,
+# never text) refines the gray zone the rule does not decide, over workload
+# METRICS ONLY. Jev's action space is bounded to reordering rungs already in the
+# chain: it can never demote the deterministic rule, forge a verdict, influence
+# the secret scanners or the push guard. Every failure path is fail-open.
+PROMOTE_TARGET = "deepseek/deepseek-v4-pro-0813"
+PROMOTE_MIN_CHARS = 40_000        # ~10k tokens; above this the input-cache discount on
+                                  # the deepseek pins informed the legacy routing threshold
+# Jev rides the OpenRouter DECISIONS API (owner-supplied endpoint, corroborated by
+# the openrouter SDK's openrouter.alpha.decisions namespace; wire contract
+# LIVE-verified 2026-09-23: POST /api/alpha/decisions with the UNWRAPPED
+# {model, state, questions} body, criteria-shaped questions, answers.<qid> =
+# {type, choice, probabilities, confidence}; $0.042/M input, $0/M output, ~$0.00002
+# per consult) and authenticates with the gate's OWN OPENROUTER_API_KEY - no
+# separate TypeSafe key exists or is needed.
+JEV_API_URL = "https://openrouter.ai/api/alpha/decisions"
+JEV_MODEL = os.environ.get("ADVERSARY_JEV_MODEL", "typesafe/jev-1.13")
+
+
+def _promote_entry(chain_list, target_model):
+    """Reorder `chain_list` so the entry whose pin-stripped model is `target_model`
+    leads; every other rung keeps its relative order. Pure - returns a NEW list;
+    an absent target returns the list unchanged (copied)."""
+    hit = next((e for e in chain_list if _split_entry(e)[0] == target_model), None)
+    if hit is None:
+        return list(chain_list)
+    return [hit] + [e for e in chain_list if e != hit]
+
+
+def _jev_request_body(state):
+    """The Decisions API request for one routing consult - factored so the wire
+    contract is unit-pinned against the live-verified shape (2026-09-23):
+    unwrapped {model, state, questions}; the question is criteria-shaped (the
+    options ARE the criteria map keys)."""
+    return {"model": JEV_MODEL, "state": state,
+            "questions": {"promote_deepseek": {
+                "type": "choice",
+                "instructions": "Pick which reviewer rung leads this pre-commit review.",
+                "criteria": {
+                    "default_order": "Luna Pro first - the owner-selected default primary",
+                    "deepseek_first": "deepseek first - the large/repeat prefix rides its "
+                                      "cache-capable pins"}}}}
+
+
+def _jev_parse_answer(d):
+    """Normalize one Decisions API response to {"choice", "probabilities",
+    "confidence"} or None - None on any shape other than the live-verified one
+    carrying an in-vocabulary choice (fail-open, never a guess)."""
+    if not isinstance(d, dict):
+        return None
+    answers = d.get("answers")
+    if not isinstance(answers, dict):
+        return None
+    ans = answers.get("promote_deepseek")
+    if not (isinstance(ans, dict) and ans.get("choice") in ("default_order", "deepseek_first")):
+        return None
+    probs = ans.get("probabilities")
+    return {"choice": ans["choice"],
+            "probabilities": dict(probs) if isinstance(probs, dict) else {},
+            "confidence": ans.get("confidence")}
+
+
+def _jev_decide(payload_chars, rebuttal, rungs):
+    """One typed-decision consult with typesafe/jev-1.13 via the OpenRouter
+    DECISIONS API (POST /api/alpha/decisions, Bearer OPENROUTER_API_KEY - the
+    gate's own key; wire contract LIVE-verified 2026-09-23). One CHOICE question
+    over workload METRICS ONLY - size, rebuttal flag, rung count; NO staged byte
+    ever leaves the machine. Returns the normalized answer dict or None on absent
+    key, kill switch, any error or any unrecognized shape - the caller then falls
+    back to the deterministic rule (fail-open). ADVERSARY_JEV_OFF=1 skips the
+    consult entirely. Under ADVERSARY_SELFTEST=1 the ONLY thing ever served is
+    ADVERSARY_JEV_FAKE (a canned answers map, parsed by the same normalizer) -
+    a selftest stays hermetic even on a machine holding a real key, and the
+    fake can only pick a routing preference between rungs already in the
+    chain, never a verdict."""
+    if os.environ.get("ADVERSARY_JEV_OFF") == "1":
+        return None
+    if os.environ.get("ADVERSARY_SELFTEST") == "1":
+        fake = os.environ.get("ADVERSARY_JEV_FAKE", "")
+        if not fake:
+            return None
+        try:
+            return _jev_parse_answer({"answers": json.loads(fake)})
+        except (ValueError, TypeError):
+            return None
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not key:
+        return None
+    state = ("pre-commit adversarial review routing. payload_chars=%d rebuttal_round=%s "
+             "chain_rungs=%d promote_threshold_chars=%s default_primary=openai/gpt-6-luna-pro "
+             "candidate_primary=deepseek/deepseek-v4-pro-0813 candidate_rationale=the "
+             "deepseek pins have measured prompt-cache reads; promote only when the "
+             "cache/cost tradeoff favors deepseek-first for "
+             "this workload."
+             % (payload_chars, "yes" if rebuttal else "no", rungs,
+                os.environ.get("ADVERSARY_PROMOTE_MIN_CHARS", str(PROMOTE_MIN_CHARS))))
+    try:
+        req = urllib.request.Request(
+            JEV_API_URL, data=json.dumps(_jev_request_body(state)).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + key,
+                     "HTTP-Referer": "https://nexusmill.com",
+                     "X-Title": "Nexusmill adversary-gate"}, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        ans = _jev_parse_answer(d)
+        if ans is not None:
+            sys.stderr.write("adversary routing: jev consult -> %s (confidence %s)\n"
+                             % (ans["choice"], ans.get("confidence")))
+        return ans
+    except (OSError, ValueError, http.client.HTTPException) as e:
+        sys.stderr.write("adversary routing: jev consult failed-open (%s) - the "
+                         "deterministic rule decides.\n" % type(e).__name__)
+        return None
+
+
+def _route_chain(model, payload, context):
+    """The workload router. Returns (chain, why): the chain string to review with
+    and the reason it was chosen. An explicit --model / ADVERSARY_MODEL override
+    is returned VERBATIM ('manual') - routing only ever reorders the DEFAULT
+    chain. Deterministic floor (no network, no key): promote the
+    deepseek-v4-pro-0813 rung to primary when the workload is cache-heavy -
+    payload >= ADVERSARY_PROMOTE_MIN_CHARS or a rebuttal round. Jev is consulted
+    ONLY in the gray zone the rule does not already decide, and may only ADD a
+    promotion - never demote one. Routing is OFF by default to honor the owner's
+    fixed primary/secondary. ADVERSARY_PROMOTE_OFF=0 opts into legacy routing."""
+    if model != DEFAULT_CHAIN:
+        return model, "manual"
+    if os.environ.get("ADVERSARY_PROMOTE_OFF", "1") == "1":
+        return model, "off"
+    entries = [m.strip() for m in model.split(",") if m.strip()]
+    promoted = _promote_entry(entries, PROMOTE_TARGET)
+    if promoted == entries:
+        return model, "default"           # target absent: nothing to route
+    try:
+        min_chars = int(os.environ.get("ADVERSARY_PROMOTE_MIN_CHARS",
+                                       str(PROMOTE_MIN_CHARS)))
+    except ValueError:
+        min_chars = PROMOTE_MIN_CHARS
+    size = len(payload)
+    if size >= min_chars or context.strip():
+        return ",".join(promoted), "rule"
+    ans = _jev_decide(size, bool(context.strip()), len(entries))
+    if ans and ans.get("choice") == "deepseek_first":
+        return ",".join(promoted), "jev"
+    return model, "default"
+
+
 def _call_one_model(entry, user_content, timeout=1200):
     fake = os.environ.get("ADVERSARY_FAKE")               # selftests only - no network
     if fake:
@@ -1024,11 +1177,32 @@ def _parse_completion(d):
     return text, d.get("usage", {}), d.get("provider")
 
 
+def _caller():
+    """The CALLING AGENT identity stamped into every review artifact and notary
+    note (owner order 2026-09-23: per-agent error rates require knowing who
+    triggered each scan). Explicit ADVERSARY_CALLER wins; then the canonical
+    harness markers - CLAUDECODE=1 (Claude Code; NOT the CLAUDE_CODE_* vars,
+    which ZCode's tooling also sets), ZCODE_APP_VERSION (ZCode), CODEX_HOME
+    (Codex) - else unknown. Old artifacts simply lack the field."""
+    explicit = os.environ.get("ADVERSARY_CALLER", "").strip()
+    if explicit:
+        return urllib.parse.quote(explicit, safe="._-", errors="surrogatepass")
+    if os.environ.get("CLAUDECODE") == "1":
+        return "claude-code"
+    if os.environ.get("ZCODE_APP_VERSION"):
+        return "zcode"
+    if os.environ.get("CODEX_HOME"):
+        return "codex"
+    return "unknown"
+
+
 def _review_header(model, usage, provider, scrubbed_count, files):
     """The first line of every review artifact; `provider:` sits after `model:` so tools that read the model keep
-    working and the provider is one field to the right."""
-    return "model: %s | provider: %s | usage: %s | scrubbed: %d | files: %s\n\n" % (
-        model, provider, usage, scrubbed_count, files)
+    working and the provider is one field to the right. `caller:` rides the END
+    of the line: every existing parser (model/provider/files regexes) is
+    prefix-anchored and ignores the trailing field."""
+    return "model: %s | provider: %s | usage: %s | scrubbed: %d | files: %s | caller: %s\n\n" % (
+        model, provider, usage, scrubbed_count, files, _caller())
 
 
 def _read_xai_key():
@@ -1472,6 +1646,33 @@ def _print_removed_symbol_refusal(hits, stream):
                  "symbol. No clearance is written.\n")
 
 
+def _compose_review_payload(diff, blobs, context):
+    """Assemble the reviewer's user message STABLE-FIRST/DIFF-LAST (cache-
+    efficiency tranche R1, owner order 2026-09-23). `blobs` is [(path, bytes)]
+    in the caller's stable sorted order. The full staged file bodies lead -
+    they are near-identical across the rounds of one landing, so consecutive
+    reviews share them as a provider-cacheable prefix (OpenRouter prompt
+    caching is strict-prefix; the legacy diff-first layout shared only the
+    system prompt and measured ~3% hits). The volatile diff and the rebuttal
+    ride last. Omission decisions keep the legacy running-total semantics:
+    the budget starts at the diff size and files are considered in order, so
+    the same files drop under the same caps as before."""
+    total = len(diff.encode("utf-8"))
+    emitted = []
+    for f, blob in blobs:
+        nbytes = len(blob)
+        if nbytes > MAX_FILE_BYTES or total + nbytes > MAX_TOTAL_BYTES:
+            emitted.append("\nFULL STAGED FILE %s: OMITTED FOR SIZE (%d bytes) - judge "
+                           "from the diff hunks and their context.\n" % (f, nbytes))
+            continue
+        emitted.append("\nFULL STAGED FILE %s:\n%s\n" % (f, blob.decode("utf-8", "replace")))
+        total += nbytes
+    parts = emitted + ["STAGED DIFF (the change under adversarial review):\n" + diff]
+    if context:
+        parts.append("\nREBUTTAL / AUTHOR NOTES (verify, do not blindly trust):\n" + context + "\n")
+    return "".join(parts)
+
+
 def _cmd_run_snapshot(model, context):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")   # before ANY print
@@ -1494,24 +1695,18 @@ def _cmd_run_snapshot(model, context):
     if dangling:
         _print_removed_symbol_refusal(dangling, sys.stdout)
         return 1
+    # Opaque binary code cannot receive a meaningful source review. Refuse before
+    # forcing textual diffs, including deleted binary code from the frozen base.
+    if (any(_blob_is_binary("", f) for f in files)
+            or any(_blob_is_binary(_REVIEW_BASE or "HEAD", f)
+                   for f in files + [k[2:] for k in removals])):
+        print("adversary gate: binary code cannot be reviewed; no clearance written.")
+        return 1
     code_paths = files + [k[2:] for k in removals]   # code files + removed code (D:oldpath)
-    diff = _diff_paths(["-c", "core.quotepath=false", "diff", "--cached", "--unified=8"],
+    diff = _diff_paths(["-c", "core.quotepath=false", "diff", "--text", "--cached", "--unified=8"],
                        code_paths)   # docs excluded (doctrine); root-anchored + argv-batched
-    parts = ["STAGED DIFF (the change under adversarial review):\n", diff]
-    total = len(diff.encode("utf-8"))
-    for f in files:
-        blob = _run_git(["show", ":" + f], binary=True)
-        body = blob.decode("utf-8", "replace")
-        nbytes = len(blob)
-        if nbytes > MAX_FILE_BYTES or total + nbytes > MAX_TOTAL_BYTES:
-            parts.append("\nFULL STAGED FILE %s: OMITTED FOR SIZE (%d bytes) - judge from "
-                         "the diff hunks and their context.\n" % (f, len(body)))
-            continue
-        parts.append("\nFULL STAGED FILE %s:\n%s\n" % (f, body))
-        total += nbytes
-    if context:
-        parts.append("\nREBUTTAL / AUTHOR NOTES (verify, do not blindly trust):\n" + context + "\n")
-    payload = "".join(parts)
+    blobs = ((f, _run_git(["show", ":" + f], binary=True)) for f in files)
+    payload = _compose_review_payload(diff, blobs, context)
     # LOCAL SCRUB of the EXACT payload about to be transmitted (owner ruling 2026-09-07): a
     # secret in a REMOVED line, a diff hunk, an oversized-omitted file's hunk or the author's
     # own context (none in scan #1's new-blob view - e.g. `git rm secret.py`, the very EV-023
@@ -1537,15 +1732,38 @@ def _cmd_run_snapshot(model, context):
                    "value, a test fixture built to that shape, or a false positive. Judge the "
                    "surrounding code as if a value of that shape were there; never treat a "
                    "tag as a missing or malformed value.\n\n" % len(scrubbed)) + payload
+    model, routing_why = _route_chain(model, payload, context)
+    if routing_why in ("rule", "jev"):
+        print("adversary gate: workload routing -> %s first (why=%s, payload=%d chars) "
+              "[the deepseek pins read provider prompt-cache at real size; the large or "
+              "repeating prefix rides them cheaply]"
+              % (_split_entry(model.split(",")[0])[0], routing_why, len(payload)))
     text, usage, model, provider = _call_model_ex(model, payload)
+    if not text.rstrip().splitlines():        # adversary finding (birth review): an
+        text = "(model returned no content - failing closed)\nVERDICT: BLOCK"
+        # substituted BEFORE the artifact write so the on-disk round carries the
+        # fail-closed verdict - else it is invisible to true-rate adjudication
     ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    art = os.path.join(_adv_dir(root), "reviews", "gate_%s.md" % ts)
-    with open(art, "w", encoding="utf-8") as fh:
-        fh.write(_review_header(model, usage, provider, len(scrubbed), files) + text)
-    lines = text.rstrip().splitlines()
-    if not lines:                        # adversary finding (birth review): empty model
-        text = "(model returned no content - failing closed)\nVERDICT: BLOCK"   # response must
-        lines = text.splitlines()        # BLOCK cleanly, never IndexError
+    # Owner order 2026-09-21 (true-rate recording): the artifact name and its
+    # staged-shas/rebuttal sidecar row are allocated ATOMICALLY - same-second runs
+    # must never cross-pair names, review text and baselines.
+    try:
+        art = _write_review_round(root, ts,
+                                  _review_header(model, usage, provider,
+                                                 len(scrubbed), files) + text,
+                                  dict({f: _staged_sha(f) for f in files}, **removals),
+                                  bool(context.strip()))
+    except _ReviewRoundPartial as exc:
+        art = exc.art                             # OUR suffixed artifact - pair with
+        print("adversary gate: review-round sidecar NOT stamped (%s) - this "   # IT,
+              "round's findings will classify as indeterminate at notarization."
+              % str(exc)[:120])
+    except Exception as exc:
+        # No durable artifact means no clearance. Never allocate an unlocked
+        # fallback name: concurrent reviewers could overwrite each other's proof.
+        print("adversary gate: cannot persist review evidence (%s); no clearance written."
+              % str(exc)[:120])
+        return 1
     verdict = "CLEAR" if _review_outcome(text) == "CLEAR" else "BLOCK"
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1816,6 +2034,400 @@ def _push_secret_barrier(lref, revs, anchors, remote_known, doc_revs=None):
     return 0
 
 
+_SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+
+
+def _adv_lock(adv, name, deadline_s=10):
+    """O_EXCL spin lock for a .adversary JSON read-modify-write (gate round 3,
+    2026-09-21: the hook auto-review can race a manual run for minutes - a concurrent
+    last-write silently DROPS a row). Returns the lock fd, or None when busy past the
+    deadline. Never steal a lock based on age: a live holder may be delayed.
+    An abandoned lock requires operator cleanup after verifying no holder is active.
+    The holder's pid is written INTO the lock for ownership checks."""
+    lock = os.path.join(adv, name + ".lock")
+    deadline = time.time() + deadline_s
+    mine = str(os.getpid())
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, mine.encode("ascii"))
+            try:
+                # ownership re-check: on POSIX a racing stale-breaker can unlink and
+                # re-create the lock between our create and this read - if the file
+                # at the path is not ours, we do NOT hold the lock (r6 F3)
+                if open(lock, encoding="utf-8", errors="replace").read().strip() != mine:
+                    os.close(fd)
+                    continue
+            except OSError:
+                os.close(fd)
+                continue
+            return fd
+        except FileExistsError:
+            if time.time() > deadline:
+                return None
+            time.sleep(0.05)
+
+
+def _adv_unlock(adv, name, fd):
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    lock = os.path.join(adv, name + ".lock")
+    try:
+        if (open(lock, encoding="utf-8", errors="replace").read().strip()
+                == str(os.getpid())):
+            os.remove(lock)                   # only OUR lock - never a successor's
+    except OSError:
+        pass
+
+
+def _stamp_review_meta(root, art_name, staged, context_used):
+    """Owner order 2026-09-21 (true-rate recording): every review round records the
+    staged blob shas it judged (same key space as clearance/changed: paths + 'D:' keys)
+    plus whether the author carried a --context REBUTTAL. Append-merge under the
+    shared .adversary lock, atomic. (Kept for direct callers; the review flow itself
+    goes through _write_review_round, which pairs artifact + sidecar atomically.)"""
+    adv = _adv_dir(root)
+    p = os.path.join(adv, "reviews", "staged_shas.json")
+    fd = _adv_lock(adv, "reviews_staged_shas")
+    if fd is None:
+        raise RuntimeError("staged_shas.json lock busy - sidecar row not written")
+    try:
+        data = {}
+        if os.path.isfile(p):
+            try:
+                data = json.loads(open(p, encoding="utf-8").read())
+            except ValueError:
+                raise RuntimeError("Corrupt evidence JSON; original preserved") from None
+        data[art_name] = {"staged": staged, "rebuttal": bool(context_used)}
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, p)
+    finally:
+        _adv_unlock(adv, "reviews_staged_shas", fd)
+
+
+class _ReviewRoundPartial(RuntimeError):
+    """The review artifact landed but its sidecar row did not (lock busy / RMW
+    failure) - carries the WRITTEN artifact path so the degraded caller pairs its
+    clearance/note with the right round, never the base-name doppelganger (r6 F6)."""
+    def __init__(self, detail, art):
+        RuntimeError.__init__(self, detail)
+        self.art = art
+
+
+def _write_review_round(root, ts, body, staged, context_used):
+    """Allocate the round's ARTIFACT NAME and its sidecar row atomically under the
+    reviews lock (gate round 4, 2026-09-21): two runs ending in the same second must
+    never share a gate_<ts>.md name - the second write would clobber the first's
+    review text while the sidecar kept both baselines crossed. Collision appends
+    '-<n>' before .md (consumers must tolerate the suffix). Returns the artifact path."""
+    adv = _adv_dir(root)
+    rvw = os.path.join(adv, "reviews")
+    fd = _adv_lock(adv, "reviews_staged_shas")
+    if fd is None:
+        raise RuntimeError("review-round lock busy - artifact + sidecar not written")
+    try:
+        base = "gate_%s" % ts
+        name = base + ".md"
+        n = 2
+        while os.path.exists(os.path.join(rvw, name)):
+            name = "%s-%d.md" % (base, n)
+            n += 1
+        art = os.path.join(rvw, name)
+        with open(art, "w", encoding="utf-8") as fh:
+            fh.write(body)
+        try:
+            p = os.path.join(rvw, "staged_shas.json")   # inlined sidecar RMW - calling
+            data = {}                                   # _stamp_review_meta here would
+            if os.path.isfile(p):                       # re-acquire the SAME lock
+                try:
+                    data = json.loads(open(p, encoding="utf-8").read())
+                except ValueError:
+                    raise RuntimeError("Corrupt evidence JSON; original preserved") from None
+            data[name] = {"staged": staged, "rebuttal": bool(context_used)}
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1)
+                f.flush(); os.fsync(f.fileno())
+            os.replace(tmp, p)
+        except Exception as exc:
+            # the ARTifact exists and is OURS - surface it so the degraded caller
+            # pairs clearance/note with the right round (r6 F6)
+            raise _ReviewRoundPartial(str(exc), art)
+        return art
+    finally:
+        _adv_unlock(adv, "reviews_staged_shas", fd)
+
+
+
+def _parse_findings(text, files):
+    """Best-effort findings of a BLOCK artifact: [(severity, [cited staged files])].
+    The reviewer writes free-form prose (severity, file, line, trigger, impact); a
+    paragraph counts as a finding when it carries a severity WORD (word-boundary, so
+    'follow'/'below' never book as LOW) or names a staged file. A round that staged
+    ONLY code removals has no files in its header; its findings cite nothing and
+    classify at episode level."""
+    body = text
+    parts = body.split("\n\n", 1)
+    if len(parts) == 2 and parts[0].startswith("model:"):
+        body = parts[1]                      # drop the header line, keep the review
+    i = body.find("VERDICT:")
+    if i >= 0:
+        body = body[:i]
+    out = []
+    for para in re.split(r"\n\s*\n", body):
+        up = para.upper()
+        sev = next((s for s in _SEVERITIES if re.search(r"\b%s\b" % s, up)), "")
+        # token-exact citation: 'util.py' must not match inside 'x_util.py' - strip
+        # the punctuation (incl. sentence periods) and trailing :line reviewers
+        # attach (path.py:12. / (path.py) / 'path.py',) and compare whole tokens
+        toks = {re.sub(r":\d+$", "", t.strip("`'\"\u2018\u2019(),:;.!?[]{}"))
+                for t in para.split()}
+        cited = [f for f in files if f in toks]
+        if sev or cited:
+            out.append((sev, cited))
+    return out
+
+
+_GNAME_RE = re.compile(r"gate_(\d{8}-\d{6})(?:-(\d+))?\.md$")
+
+
+def _adjudicate_cycle(root, head, changed, clear, note_type, after=None):
+    """Owner order 2026-09-21 (true-rate recording): classify every finding of this
+    commit's INITIAL denial from evidence the gate itself holds (review artifacts,
+    the staged-shas sidecar, clearance rows) and return the episode dict for
+    .adversary/adjudications.json - None when this commit had no denial cycle (a
+    first-pass CLEAR commit carries no episode, matching the ledger's numerator).
+    `after` (the PREVIOUS commit's note 'when') bounds the cycle: a BLOCK older than
+    the last landing belongs to an abandoned change, never to this commit.
+    Outcomes: fixed (blobs changed after the denial - real, remediated),
+    rebutted-upheld (the CLEARING round carried a --context rebuttal that held on
+    unchanged bytes - false positive), cleared-unedited (a re-run cleared unchanged
+    bytes - model variance), overridden (OVERRIDE note - the owner's call, not an
+    adjudication), indeterminate (the round predates the sidecar). Any BLOCK round
+    that still carried a rebuttal flags rebuttal_rejected (the reviewer rejected it
+    - corroboration the finding is real)."""
+    rvw = os.path.join(_adv_dir(root), "reviews")
+    sidecar = {}
+    sc_path = os.path.join(rvw, "staged_shas.json")
+    if os.path.isfile(sc_path):
+        try:
+            sidecar = json.loads(open(sc_path, encoding="utf-8").read())
+        except ValueError:
+            sidecar = {}
+    consumed = set()
+    adj_path = os.path.join(_adv_dir(root), "adjudications.json")
+    if os.path.isfile(adj_path):
+        try:
+            for ep in json.loads(open(adj_path, encoding="utf-8").read()).get("episodes", []):
+                consumed.add(os.path.basename(ep.get("denial_artifact") or ""))
+                consumed.update(os.path.basename(r) for r in ep.get("rounds", []))
+        except ValueError:
+            pass
+    lo = after or ""                           # compare the EXTRACTED ts, never the
+    rounds = []                                # whole name: '-2' sorts before '.md'
+    for name in sorted(os.listdir(rvw)):
+        g = _GNAME_RE.match(name)              # (name -> (ts, n) keeps suffixed
+        if not g:                              # collisions chronologically ordered)
+            continue
+        rkey = (g.group(1), int(g.group(2) or 0))
+        try:
+            text = open(os.path.join(rvw, name), encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        m = re.search(r"files:\s*(\[[^\n]*)", text)   # _review_header writes a Python
+        files = []                                      # list repr - parse it as one
+        if m:
+            # end-of-line capture, then CUT at the trailing '| caller:' field: a
+            # ']' inside a file name must NOT truncate the list (gate r2 F1 - the
+            # bracket-terminated regex did) and the caller field must not leak
+            # into the names (gate r1 F1 - the bare end-of-line capture did)
+            frag = re.split(r"\s*\|\s*caller:\s*\S+\s*$", m.group(1))[0].strip()
+            try:
+                val = ast.literal_eval(frag) if frag.endswith("]") else None
+            except (ValueError, SyntaxError):
+                val = None
+            if isinstance(val, list):
+                files = [str(x) for x in val]
+            else:
+                files = [t.strip().strip("'\"") for t in frag.strip("[]").split(",")
+                         if t.strip()]
+        # derive the round's verdict from the SAME authority the run path enforces
+        # (_review_outcome) - a lowercase 'verdict: block' or spaced 'VERDICT : X'
+        # was a real failed round to the gate and must be one here too (r7 F1)
+        outcome = _review_outcome(text)
+        verdict = ("CLEAR" if outcome == "CLEAR" else
+                   "BLOCK" if outcome in ("BLOCK", "malformed") else None)
+        # header_listed separates a REAL empty list (a removals-only round) from a
+        # parse miss (no files: header at all) - the latter must adopt nothing (r5 F5)
+        rounds.append((rkey, name, verdict, files, text, m is not None))
+    rounds.sort(key=lambda r: r[0])            # (ts, n): suffixed collisions stay in
+                                               # write order behind their base name
+
+    def _touches(r):
+        # candidate keys = header names + the round's OWN sidecar staged keys: a
+        # mixed round's D: half lives ONLY in the sidecar (the header lists files)
+        staged = sidecar.get(r[1], {}).get("staged", {})
+        keys = set(staged) | set(r[3]) | {"D:" + f for f in r[3]}
+        if not keys:
+            return bool(r[5]) and any(k.startswith("D:") for k in changed)
+        return any(k in changed for k in keys)
+
+    # >= at second granularity on the EXTRACTED ts: a same-second denial belongs to
+    # THIS cycle (the consumed set keeps the parent's own rounds out); a name-level
+    # compare broke on the '-2' collision suffix ('-' sorts before '.') (r6 F1)
+    blocks = [r for r in rounds if r[2] == "BLOCK" and r[1] not in consumed
+              and (not lo or r[0][0] >= lo) and _touches(r)]
+    if not blocks:
+        return None
+    denial = blocks[0]                        # earliest in-cycle: the initial denial
+    denial_shas = sidecar.get(denial[1], {}).get("staged", {})
+    clearing = sorted({os.path.basename(clear[k].get("artifact") or "")
+                       for k in changed if clear.get(k, {}).get("artifact")} - {""})
+    round_names = [r[1] for r in blocks] + clearing
+    # ONLY the clearing round's rebuttal can book `rebutted-upheld`: a rebuttal the
+    # reviewer REJECTED (that round still BLOCKed) is the opposite evidence. The
+    # clearing round is per-FILE - a commit whose files cleared in different rounds
+    # must not let one file's rebuttal taint the others' findings (gate round 4).
+    rebuttal_rounds = [n for n in round_names if sidecar.get(n, {}).get("rebuttal")]
+    rejected = {r[1] for r in blocks if sidecar.get(r[1], {}).get("rebuttal")}
+
+    def _pair(c):
+        """A cited file's key in each evidence space: the denial staged it (maybe as
+        a plain path) while the commit may have remediated by DELETING it (a 'D:' key
+        in changed) - join across both spellings or the delete-fix books wrong."""
+        ck = c if c in changed else ("D:" + c) if ("D:" + c) in changed else None
+        dk = c if c in denial_shas else ("D:" + c) if ("D:" + c) in denial_shas else None
+        return ck, dk
+
+    def _outcome(cited):
+        if note_type == "OVERRIDE":
+            return "overridden", "override"
+        pairs = [_pair(c) for c in cited if _pair(c)[0] is not None]
+        if not pairs:                          # no cited file landed under its own
+            pairs = [_pair(k[2:] if k.startswith("D:") else k)   # name - classify on
+                     for k in changed]          # the keys that DID land
+        # the keys that drove classification, CHANGED-side: the clearing-round
+        # lookup must key on THESE - keying on the raw cited name could pull a
+        # STALE clearance row for a file this commit never carried (r8 F1)
+        used = [ck for ck, _dk in pairs if ck]
+        known = [(ck, dk) for ck, dk in pairs if dk]
+        if not any(ck for ck, _dk in known):
+            used = [k for k in changed if k in denial_shas]
+            known = [(k, k) for k in used]
+        if not known:
+            return "indeterminate", "evidence-absent"
+        if any(denial_shas[dk] != changed[ck] for ck, dk in known if ck):
+            return "fixed", "blobs-changed-after-denial"
+        arts = ({os.path.basename(clear[k]["artifact"])
+                 for k in used if clear.get(k, {}).get("artifact")} or clearing)
+        if any(sidecar.get(n, {}).get("rebuttal") for n in arts):
+            return "rebutted-upheld", "rebutted-then-cleared-unchanged"
+        if not arts or not any(n in sidecar for n in arts):
+            # no clearing round is known at all, or the clear predates the sidecar /
+            # its stamp failed - whether a rebuttal carried it is UNANSWERABLE, not
+            # 'no rebuttal' (gate rounds 3+5, 2026-09-21)
+            return "indeterminate", "clearing-evidence-absent"
+        return "cleared-unedited", "rerun-cleared-unchanged"
+
+    findings = []
+    for idx, (sev, cited) in enumerate(_parse_findings(denial[4], denial[3]), 1):
+        outcome, method = _outcome(cited)
+        findings.append({"id": "F%d" % idx, "severity": sev, "files": cited,
+                         "outcome": outcome, "method": method,
+                         "rebuttal_rejected": bool(rejected)})
+    if not findings:                          # unparsable denial: one honest episode row
+        outcome, method = _outcome([])
+        findings = [{"id": "F1", "severity": "", "files": [],
+                     "outcome": outcome, "method": method + "+unparsed",
+                     "rebuttal_rejected": bool(rejected)}]
+    counts = {}
+    _head = denial[4].splitlines()[0] if denial[4] else ""
+    _cm = re.search(r"\| caller: (\S+)", _head)   # header line ONLY: prose can
+    for f in findings:                              # mention 'caller:' (gate r2 F2)
+        counts[f["outcome"]] = counts.get(f["outcome"], 0) + 1
+    return {"commit": head,
+            "caller": _cm.group(1) if _cm else "",
+            "recorded": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
+            "type": note_type, "denial_artifact": "reviews/" + denial[1],
+            "rounds": sorted("reviews/" + n for n in round_names),
+            "rebuttal_rounds": ["reviews/" + n for n in rebuttal_rounds],
+            "denial_shas_known": bool(denial_shas),
+            "findings": findings, "outcome_counts": counts}
+
+
+def _append_adjudication(root, episode):
+    """Append-only store (owner order 2026-09-21): one episode per commit; a second
+    call for the same commit is a no-op - the hook and the commit driver BOTH invoke
+    record, so the read-modify-write runs under the shared .adversary lock (a
+    concurrent last-write would silently DROP an episode). Rows are never rewritten
+    or deleted (evidence-docket discipline). Returns True when persisted (or
+    already present), False when the lock stayed busy - callers must NOT report
+    success on False (r7 F3)."""
+    adv = _adv_dir(root)
+    p = os.path.join(adv, "adjudications.json")
+    fd = _adv_lock(adv, "adjudications")
+    if fd is None:
+        sys.stderr.write("adversary record: adjudication lock busy - episode for %s "
+                         "NOT persisted.\n" % episode.get("commit", "")[:12])
+        return False
+    try:
+        data = {"version": 1, "episodes": []}
+        if os.path.isfile(p):
+            try:
+                data = json.loads(open(p, encoding="utf-8").read())
+            except ValueError:
+                raise RuntimeError("Corrupt evidence JSON; original preserved") from None
+        if not any(ep.get("commit") == episode.get("commit")
+                   for ep in data.get("episodes", [])):
+            data.setdefault("episodes", []).append(episode)
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=1)
+                f.flush(); os.fsync(f.fileno())
+            os.replace(tmp, p)
+        return True
+    finally:
+        _adv_unlock(adv, "adjudications", fd)
+
+
+def _cycle_floor(head, ref):
+    """The earliest artifact timestamp that can belong to THIS commit's review cycle.
+    Anchor preference (gate round 5 F1): the parent note's CLEARING-ROUND timestamps
+    (files[k]['when'] - the gate's own clock, strictly earlier than the record, and
+    no child denial can predate the parent's clear), then the note's top-level
+    'when', then - when the parent carries no note (a bypassed commit, a failed
+    record, the first notarized commit) - the parent's own COMMIT time. None only
+    for a root commit. Callers compare with >= (second granularity must never drop a
+    same-second denial; the consumed set keeps the parent's own rounds out)."""
+    try:
+        if not _git_ok(["rev-parse", "--verify", "--quiet", head + "~1"]):
+            return None
+        if _git_ok(["notes", "--ref", ref, "show", head + "~1"]):
+            try:
+                note = json.loads(_run_git(["notes", "--ref", ref, "show",
+                                            head + "~1"]))
+                rounds = [row.get("when") for row in note.get("files", {}).values()
+                          if isinstance(row, dict) and row.get("when")]
+                if rounds:
+                    return max(rounds)
+                if note.get("when"):
+                    return note["when"]
+            except (SystemExit, ValueError):
+                pass
+        out = _run_git(["log", "-1", "--date=iso-local", "--format=%cd",
+                        head + "~1"]).strip()
+        return (out[:10].replace("-", "") + "-" + out[11:19].replace(":", "")) or None
+    except (SystemExit, Exception):
+        # SystemExit is NOT an Exception - _run_git raises it, and it must never
+        # escape to kill the notarization (r8 F2)
+        return None
+
+
 def cmd_record(ref):
     """Post-commit NOTARIZATION (fail-closed): write a durable git note for HEAD only when
     every changed code blob matches a fresh CLEAR row (or a provenance-matched OVERRIDE).
@@ -1834,8 +2446,9 @@ def cmd_record(ref):
     if _git_ok(["notes", "--ref", ref, "show", head]):
         return 0                              # already notarized (hook and driver both call this)
     note = None
-    ovp = os.path.join(_adv_dir(root), "override_used.json")
-    if os.path.isfile(ovp):
+    clear = _load_clear(root)                 # read once for both note paths; the
+    ovp = os.path.join(_adv_dir(root), "override_used.json")   # OVERRIDE branch also
+    if os.path.isfile(ovp):                   # feeds it to adjudication below
         try:
             ov = json.loads(open(ovp, encoding="utf-8").read())
         except ValueError:
@@ -1852,7 +2465,6 @@ def cmd_record(ref):
             sys.stderr.write("adversary record: override_used.json does not match HEAD's "
                              "blobs - discarded (a stale override cannot bless this commit).\n")
     if note is None:
-        clear = _load_clear(root)
         bad = [k for k, sha in changed.items()
                if not (clear.get(k) and clear[k].get("sha") == sha
                        and clear[k].get("verdict") == "CLEAR")]
@@ -1869,12 +2481,35 @@ def cmd_record(ref):
                 p = os.path.join(root, rel)
                 if os.path.isfile(p):
                     arts[rel] = open(p, encoding="utf-8", errors="replace").read()[:100_000]
-        note = {"type": "CLEAR", "commit": head,
+        note = {"type": "CLEAR", "commit": head, "caller": _caller(),
                 "when": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
                 "files": {k: {"sha": changed[k], "model": clear[k].get("model"),
                               "when": clear[k].get("when"),
                               "artifact": clear[k].get("artifact")} for k in changed},
                 "artifacts": arts}
+    # Owner order 2026-09-21 (true-rate recording): classify this commit's denial
+    # cycle, embed the summary in the notary note, append the full episode after.
+    # Adjudication failure must never block a notarization - it degrades loudly.
+    # `after` anchors the cycle at the PREVIOUS commit's note: a BLOCK older than
+    # the last landing is an abandoned change's, never this commit's initial denial.
+    episode = None
+    try:
+        # `after` anchors the cycle at the PREVIOUS commit's cycle close (its note's
+        # clearing-round 'when', else its record 'when', else its commit time): a
+        # BLOCK older than that is an abandoned change's, never this commit's.
+        # Inside the try and Exception-broad: adjudication plumbing must NEVER block
+        # a notarization (r6 F2).
+        after = _cycle_floor(head, ref)
+        episode = _adjudicate_cycle(root, head, changed,
+                                    clear if note["type"] == "CLEAR" else {},
+                                    note["type"], after)
+        if episode:
+            note["adjudication"] = {"denial": episode["denial_artifact"],
+                                    "outcomes": episode["outcome_counts"],
+                                    "detail": ".adversary/adjudications.json"}
+    except (SystemExit, Exception) as exc:   # SystemExit escapes bare-Exception
+        sys.stderr.write("adversary record: adjudication skipped (%s) - the notarization "
+                         "stands, the episode is NOT recorded.\n" % str(exc)[:120])
     tmp = os.path.join(_adv_dir(root), "note.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(note, f, indent=1)
@@ -1882,6 +2517,42 @@ def cmd_record(ref):
     os.remove(tmp)
     print("adversary record: %s note written for %s (%d file(s))"
           % (note["type"], head[:12], len(changed)))
+    if episode:
+        try:
+            # success is reported ONLY on real persistence - _append returns False
+            # (lock busy) without raising, and the note's adjudication block would
+            # then point at a row that does not exist (r7 F3)
+            if _append_adjudication(root, episode):
+                print("adversary record: adjudication %s -> %s"
+                      % (episode["denial_artifact"], episode["outcome_counts"]))
+            else:
+                # honest recovery note: the note-exists guard makes a re-run of
+                # `record` a no-op, so the episode is lost for this commit (r8 F4)
+                sys.stderr.write("adversary record: the note's adjudication block "
+                                 "references an episode NOT in adjudications.json - "
+                                 "it is LOST for this commit (re-running record is a "
+                                 "no-op once the note exists); the gap is recorded "
+                                 "here and visible against the file's episode list.\n")
+        except (SystemExit, Exception) as exc:
+            sys.stderr.write("adversary record: adjudication NOT persisted (%s) - the "
+                             "episode is lost for this commit.\n" % str(exc)[:120])
+    # G39 docket reminder (owner order 2026-08-31; enforcement added 2026-09-21): when a
+    # BLOCK artifact exists from the last 48h, this commit is plausibly a remediation - the
+    # catch OWES a row in the evidence docket, written in the SAME working session.
+    try:
+        cutoff = datetime.datetime.now() - datetime.timedelta(hours=48)
+        rvw = os.path.join(_adv_dir(root), "reviews")
+        flagged = [f for f in os.listdir(rvw) if f.startswith("gate_")
+                   and os.path.getmtime(os.path.join(rvw, f)) >= cutoff.timestamp()
+                   and "VERDICT: BLOCK" in open(os.path.join(rvw, f),
+                                                encoding="utf-8", errors="replace").read()]
+        if flagged:
+            print("G39 DOCKET: %d BLOCK review(s) in the last 48h - if this commit "
+                  "remediates a gate catch, add a row to colibri-code-review/docs/"
+                  "gate_evidence.json (GATE_EVIDENCE_DOCKET.md) NOW, same session; "
+                  "rows are never deleted, false rebuttals are the strongest rows." % len(flagged))
+    except Exception:
+        pass
     return 0
 
 
