@@ -1,0 +1,42 @@
+{
+ "type": "CLEAR",
+ "commit": "4afba955ee804aa8e9f5f794fba827541c0def51",
+ "caller": "unknown",
+ "when": "20260927-070245",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "09ce4780d6f14abe4ac511cd5ad96f99037a06795e8fbd60d4e63aae8c366543",
+   "model": "openai/gpt-6-luna-pro",
+   "when": "20260927-070219",
+   "artifact": ".adversary\\reviews\\gate_20260927-070219.md"
+  },
+  "plugins/adversary-gate/.claude-plugin/plugin.json": {
+   "sha": "58b5a95dbe0e46b7c84a022261c7bfcba0288ecca2c163be3104865bd21c6f72",
+   "model": "openai/gpt-6-luna-pro",
+   "when": "20260927-070219",
+   "artifact": ".adversary\\reviews\\gate_20260927-070219.md"
+  },
+  "plugins/adversary-gate/tools/adversary_gate.py": {
+   "sha": "8ee873ec27728e83ce48dbbf2a711526d1a44d9c537348ac9bd24c3b4af6c569",
+   "model": "openai/gpt-6-luna-pro",
+   "when": "20260927-070219",
+   "artifact": ".adversary\\reviews\\gate_20260927-070219.md"
+  },
+  "plugins/adversary-gate/tools/gate_selftest.py": {
+   "sha": "3f16dbb63363f96d08a4ce4850a686faa0315bca7fef0c7bd0dc340f5f82d64f",
+   "model": "openai/gpt-6-luna-pro",
+   "when": "20260927-070219",
+   "artifact": ".adversary\\reviews\\gate_20260927-070219.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20260927-070219.md": "model: openai/gpt-6-luna-pro | provider: OpenAI | usage: {'prompt_tokens': 357155, 'completion_tokens': 10149, 'total_tokens': 367304, 'cost': 0.05841817, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 114581, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.05841817, 'upstream_inference_prompt_cost': 0.05080642, 'upstream_inference_completions_cost': 0.00761175}, 'completion_tokens_details': {'reasoning_tokens': 10112, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/.claude-plugin/plugin.json', 'plugins/adversary-gate/tools/adversary_gate.py', 'plugins/adversary-gate/tools/gate_selftest.py'] | caller: unknown\n\nVERDICT: CLEAR"
+ },
+ "adjudication": {
+  "denial": "reviews/gate_20260927-062100.md",
+  "outcomes": {
+   "fixed": 1
+  },
+  "detail": ".adversary/adjudications.json"
+ }
+}
