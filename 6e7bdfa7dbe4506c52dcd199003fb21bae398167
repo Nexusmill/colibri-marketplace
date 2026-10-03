@@ -1,0 +1,29 @@
+{
+ "type": "CLEAR",
+ "commit": "6e7bdfa7dbe4506c52dcd199003fb21bae398167",
+ "caller": "unknown",
+ "when": "20261003-175658",
+ "files": {
+  ".githooks/.gitattributes": {
+   "sha": "d59c068482751b998e2701a727932753d63c849ad4220f3194548900c40dd7b7",
+   "model": "xai:grok-4.6",
+   "when": "20261003-175630",
+   "artifact": ".adversary\\reviews\\gate_20261003-175630.md"
+  },
+  ".githooks/adversary_audit.py": {
+   "sha": "3057073410aaa87b6b1763ba381732eb7ccfc6775cf78187de8b946fe0d36f14",
+   "model": "xai:grok-4.6",
+   "when": "20261003-175630",
+   "artifact": ".adversary\\reviews\\gate_20261003-175630.md"
+  },
+  ".githooks/adversary_text_rules_epoch": {
+   "sha": "4bc2690877e11e746ecb9a70f1b53a4af704ebe5e08ea5449d5c034d5b0b6587",
+   "model": "xai:grok-4.6",
+   "when": "20261003-175630",
+   "artifact": ".adversary\\reviews\\gate_20261003-175630.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261003-175630.md": "model: xai:grok-4.6 | provider: xai | usage: {'input_tokens': 10454, 'input_tokens_details': {'cached_tokens': 0}, 'output_tokens': 28589, 'output_tokens_details': {'reasoning_tokens': 28452}, 'total_tokens': 39043, 'num_sources_used': 0, 'num_server_side_tools_used': 0, 'cost_in_usd_ticks': 1924420000, 'context_details': {'input_tokens': 10454, 'output_tokens': 28596}} | scrubbed: 0 | files: ['.githooks/.gitattributes', '.githooks/adversary_audit.py', '.githooks/adversary_text_rules_epoch'] | caller: unknown\n\nThe text-epoch walker matches the existing hook-names fail-closed pattern: HEAD-tree blob only, regular-file mode check, single-row `text-files` + full digest/ROOT, ancestry vs every `--full-history` add, shallow/malformed/moved \u2192 apply everywhere and (for moved/unreadable) an explicit violation. `_is_code` still treats gated prefixes as code when `text_files` is false; only non-gated `.txt` is grandfathered, and only for commits ancestor-or-equal of the recorded sha. Signature default remains fail-closed. No contract break in the staged auditor.\n\nVERDICT: CLEAR"
+ }
+}
