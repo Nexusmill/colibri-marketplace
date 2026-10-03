@@ -39,7 +39,9 @@ import sys
 CODE_EXTS = {".py", ".js", ".json", ".ts", ".jsx", ".tsx", ".html", ".css", ".ps1", ".sh", ".bat",
              ".c", ".cpp", ".h", ".rs", ".go", ".java", ".glsl", ".osl",
              # EV-029 (2026-09-04): ES-module / CommonJS / TS-module forms (parity with the gate)
-             ".mjs", ".cjs", ".mts", ".cts"}
+             ".mjs", ".cjs", ".mts", ".cts",
+             # OWNER RULING 2026-10-02 (parity with the gate): agent-modified .txt is reviewed
+             ".txt"}
 GATED_PREFIXES = (".githooks/", ".github/workflows/")
 # 2026-09-06: extensionless git hook files are code wherever they live (parity with the gate);
 # confined to commits after the per-repo rules epoch (see _hook_names_apply)
