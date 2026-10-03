@@ -1,0 +1,17 @@
+{
+ "type": "CLEAR",
+ "commit": "facdd62599907ec322f0e436784a63df321cd343",
+ "caller": "unknown",
+ "when": "20261003-144917",
+ "files": {
+  ".githooks/adversary_audit.py": {
+   "sha": "6077853f9883394a94c670c93a9a3f0f185521f4ced7c16817fb54f87939e090",
+   "model": "xai:grok-4.6",
+   "when": "20261003-144806",
+   "artifact": ".adversary\\reviews\\gate_20261003-144806.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261003-144806.md": "model: xai:grok-4.6 | provider: xai | usage: {'input_tokens': 6316, 'input_tokens_details': {'cached_tokens': 512}, 'output_tokens': 4362, 'output_tokens_details': {'reasoning_tokens': 4237}, 'total_tokens': 10678, 'num_sources_used': 0, 'num_server_side_tools_used': 0, 'cost_in_usd_ticks': 380360000, 'context_details': {'input_tokens': 6316, 'output_tokens': 4369}} | scrubbed: 0 | files: ['.githooks/adversary_audit.py'] | caller: unknown\n\nThe staged delta only expands `CODE_EXTS` with `.txt` (plus the parity comment). `_is_code` / `_changed_code` / note matching then treat `.txt` like every other gated extension; hashing still goes through `git show` + sha256. That matches the stated owner ruling and the existing CODE_EXTS-expansion pattern (EV-029 also landed without a new rules epoch; HOOK_NAMES grandfathering is a separate, already-scoped mechanism). No caller, note schema, baseline, or epoch contract in the provided bytes is broken by this.\n\nVERDICT: CLEAR"
+ }
+}
