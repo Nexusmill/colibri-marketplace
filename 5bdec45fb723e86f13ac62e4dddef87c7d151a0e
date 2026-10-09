@@ -1,0 +1,26 @@
+{
+ "type": "CLEAR",
+ "commit": "5bdec45fb723e86f13ac62e4dddef87c7d151a0e",
+ "caller": "zcode",
+ "when": "20261009-174510",
+ "files": {
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "f3df69b47b2ecf925fb9e7fa63b557a55949a0a91a24da35fb02af3f4eabe47d",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "CLEAR",
+   "when": "20261009-174508",
+   "artifact": ".adversary\\reviews\\gate_20261009-174508.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261009-174508.md": "model: deepseek/deepseek-v4.1-flash@baidu/fp8 | provider: Baidu | usage: {'prompt_tokens': 1325, 'completion_tokens': 555, 'total_tokens': 1880, 'cost': 0.0010635, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0010635, 'upstream_inference_prompt_cost': 0.0003975, 'upstream_inference_completions_cost': 0.000666}, 'completion_tokens_details': {'reasoning_tokens': 428, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['plugins/colibri-review/.claude-plugin/plugin.json'] | caller: zcode\n\nStaged file is valid JSON: braces balanced, trailing comma removed correctly, `version` bumped to `0.5.0`, and the `description` value is a single well-formed string with no unescaped quotes or truncation. No call sites, keys, or consumers are visible in the change set, and the diff touches only two string values plus the terminal newline (a formatting concern, not a defect). The description's claims about gate tiers/pins are opaque prose that cannot be verified or refuted against the provided bytes, so no finding can be grounded in them.\n\nVERDICT: CLEAR"
+ },
+ "artifacts_sha256": {
+  ".adversary\\reviews\\gate_20261009-174508.md": {
+   "embedded": "2ecd3891d47b508b0ce63e4c86e6761fbb7ff7d763e79f89e9b0fd275d079f64",
+   "disk": "2ecd3891d47b508b0ce63e4c86e6761fbb7ff7d763e79f89e9b0fd275d079f64"
+  }
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "d1d60e5046a1691a6eaa8aa4aeef0527d9857cde3ad6fca0fc0c9dcc1bf96480"
+}
