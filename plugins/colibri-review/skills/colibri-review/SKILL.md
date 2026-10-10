@@ -59,9 +59,10 @@ single-file reviewer can never have — repo context, manifests, and a verificat
 - **THE THREE-MODEL LOCK (owner ruling 2026-09-15):** bug / quality / spec /
   plan can LOCK (feature mode is EXEMPT — features are infinite, owner
   2026-09-14; it hunts forever and never locks). When THREE DIFFERENT model
-  types — distinct model families (the in-session model, deepseek-v4.1-flash
-  [gate tier 1], hy4-preview [gate tier 2] are the three houses — kimi-k2.7-code
-  is the terminal distinct house; two versions of one family count as ONE
+  types — distinct model families (the in-session model [the standing reviewer],
+  deepseek-v4.1-flash [gate tier 1, optional external], hy4-preview [gate tier 2,
+  optional external] are the three houses — kimi-k2.7-code is the terminal
+  distinct house; two versions of one family count as ONE
   type) — have each run an additional context-loaded pass at the SAME sha
   and NONE surfaced new material, the file is LOCKED for that mode at that
   sha: no further scans of that mode until the file's bytes change — not a
@@ -140,8 +141,8 @@ clauses hardest (disabled states, error paths, sentinels, cost disclosure, side 
 boundaries); clauses unjudgeable from the unit go under `## UNJUDGEABLE HERE` (say where
 they live) — feed those rows to that file next. Never critique the expectations, never
 report unrelated bugs (bug mode owns those). Confirmed divergences are the in-session twin
-of the harness's DRIFT verdict; the paid external twin is the hy4-review CLI with
-the gate-ladder `--model` pin (tier 1 quick, tier 2 escalation; grok-review is
+of the harness's DRIFT verdict; the OPTIONAL paid external twin is the hy4-review CLI
+with the gate-ladder `--model` pin (tier 1 quick, tier 2 escalation; grok-review is
 OFF-ladder since 2026-10-09 and its passes do not count toward the lock)
 `--mode spec` (same registry input). Only the as-a-user rig lane catches what a user SEES.
 
@@ -152,8 +153,8 @@ identifies the load-bearing defects itself first. Per item: Objective, Root caus
 ordered Steps, Verification (commands + expected outcomes), Risk & rollback; ends with
 commit-sized tranche batching. The plan lands in the same review area (`.colibri_reviews/`
 / the console archive) named `__plan__`; EXECUTION is always a separate tranche under TDD
-with same-commit manifest rows (G35). External twin: the hy4-review CLI with
-the gate-ladder `--model` pin
+with same-commit manifest rows (G35). Optional external twin: the hy4-review CLI
+with the gate-ladder `--model` pin
 `--mode plan [--findings PATH]`; the console's Remediation Plan mode.
 
 **Context-aware checks (mandatory additions in every mode — the reason this beats K3):**
@@ -214,54 +215,61 @@ Same laws + the debug ladder, in order, no skipping:
   per-file units — never instead of them.
 - Repo work → commit per G4 (`review(scope):` or `fix(scope):` + manifest in same commit).
 
-## The scan ladder — standing protocol after feature runs (owner order 2026-09-19)
+## The review ladder — local agent reviews; external passes optional (owner order 2026-10-09, superseding the standing ladder of 2026-09-19)
 
 Gate clearance is DIFF clearance for the staged bytes — it is not a file review.
-After any feature run (a wave whose commits cleared the gate), the ladder fires
-automatically, with no owner reminder:
+THE colibri reviewer is the LOCAL agent — the in-session model (GLM) running
+this skill: it performs every mode's file-by-file review, the verification
+pass, and the synthesis. That is the standing protocol; it fires automatically,
+with no owner reminder and no paid call.
 
-1. **Rung M2 — every changed file, the gate's TIER-1 rung.** Every source file and
-   every test file the run touched gets a full-file `bug` review by the gate's
-   quick chain — `deepseek/deepseek-v4.1-flash@baidu/fp8` primary,
-   `deepseek/deepseek-v4.1-flash@deepinfra/fp8` failover — never the in-session
-   model. Disclose the batch cost before the first call (G19).
-2. **Rung M3 — HIGHs escalate up the SAME ladder.** Any file where a scan found
-   a HIGH or CRITICAL gets one more full-file pass by the gate's strong chain —
-   `tencent/hy4-preview@tencent/fp8` primary, `tencent/hy4-preview@novita/fp8`
-   backup, `moonshotai/kimi-k2.7-code` terminal — with the prior review(s)
-   loaded as context and the mandate of the cache rule: hunt NEW findings only —
-   restate nothing; a pass that surfaces nothing records `new: 0` honestly.
-3. **Findings are verified before they count** (Phase 3 against current
+External passes are OPTIONAL second opinions, never automatic and never
+required to close a run (the standing M2/M3 ladder of 2026-09-19 is retired by
+this order). When the owner asks for one — or a run's findings make one worth
+PROPOSING (say so and disclose the batch cost, G19, before the first call) —
+the pass runs on the GATE'S pinned ladder, exactly as etched in G37: tier 1
+`deepseek/deepseek-v4.1-flash@baidu/fp8` →
+`deepseek/deepseek-v4.1-flash@deepinfra/fp8` for full-file bug hunts; tier 2
+`tencent/hy4-preview@tencent/fp8` → `tencent/hy4-preview@novita/fp8` →
+`moonshotai/kimi-k2.7-code` when a HIGH/CRITICAL deserves a stronger second
+look — prior review(s) loaded as context, hunting NEW findings only; a pass
+that surfaces nothing records `new: 0` honestly.
+
+Deliberate NON-unification is the point of this order: the LOCAL agent reviews
+code; the GATE is ALWAYS EXTERNAL (its paid pinned ladder clears commits; the
+local rung stays measurement-only per ruling D2 until the owner rules). Two
+different model families therefore see every change — a blind spot one family
+has does not pass both sides.
+
+1. **Findings are verified before they count** (Phase 3 against current
    bytes); confirmed defects are remediated and logged in the same session;
-   every ladder pass lands as manifest pass lineage and counts toward the
-   three-model lock like any other pass.
-4. **New test files are first-class ladder members** — the gate takes them on
-   commit (automatic) and the M2 scan takes them after the run; a test file
-   is never "just a test" (see Phase 0).
+   every optional external pass lands as manifest pass lineage and counts
+   toward the three-model lock like any other pass.
+2. **New test files are first-class review members** — the gate takes them on
+   commit (automatic) and the local agent reviews them like any source file;
+   a test file is never "just a test" (see Phase 0).
 
-Routing table (owner order 2026-10-09, etched in GLOBAL_RULES G37): the skill and
-EVERY review dispatch use the GATE'S pinned ladder — identical tiers, identical
-provider pins, rotated together in the same owner order that changes them in
-adversary_gate.py (TIER1_CHAIN / TIER2_CHAIN are the authoritative strings; the
-hy4-review headless CLI accepts any OpenRouter id and carries the whole ladder
-via explicit `--model` pins): gate tier 1 deepseek-v4.1-flash @baidu/fp8 →
-@deepinfra/fp8 (diff clearance AND the M2 file hunt) · gate tier 2
-hy4-preview @tencent/fp8 → @novita/fp8 → kimi-k2.7-code (strong escalation and
-the M3 context-loaded full-file hunt). On unavailability substitute DOWN THE
-CHAIN exactly like the gate's fallback semantics — never the same rung twice on
-one file, never an off-ladder model (grok-review is OFF the ladder since this
-order; it survives only as the optional second-opinion channel below). The
-three-model lock keeps its meaning: deepseek-flash, hy4-preview, and kimi are
-three distinct families. The in-session model orchestrates the ladder,
-assembles context packs, and verifies findings; it is never the ladder's
-scanner.
+Routing table (owner order 2026-10-09, etched in GLOBAL_RULES G37):
+**STANDING** — the in-session model (GLM) reviews every changed file in every
+mode; it is THE reviewer, not merely an orchestrator; no paid call is owed.
+**OPTIONAL EXTERNAL** — the gate's pinned ladder above, via the hy4-review
+headless CLI with explicit `--model` pins (it accepts any OpenRouter id);
+substitute DOWN THE CHAIN exactly like the gate's fallback semantics — never
+the same rung twice on one file, never an off-ladder model (grok-review stays
+off-ladder: second opinion only, its passes never count toward the three-model
+lock). The three-model lock keeps its meaning — in-session GLM, deepseek-flash,
+hy4-preview/kimi are distinct families — but it completes only when optional
+external passes actually run; without them the file simply stays unlocked.
+The external model is never the gate's substitute either: the GATE stays
+always-external, the skill stays local-first — that separation is the policy.
 
-## External second opinions (demoted, optional outside the ladder)
-Outside the scan ladder, paid external reviews (K3 / GLM via OpenRouter, the Colibri app or
-run_batch.py) are permitted ONLY as second opinions after the in-session review exists, with
-G36 freshness (current bytes at dispatch) and G19 cost disclosure BEFORE the call. Their
-findings enter the report only after passing Phase 3 verification. They are never the primary
-reviewer. Inside the ladder the external model IS the designated scanner by standing order.
+## External second opinions (optional — the standing reviewer is the local agent)
+Beyond the standing local review, paid external passes (the gate-ladder pins via the
+hy4-review CLI; K3 / GLM via OpenRouter, the Colibri app or run_batch.py) are permitted
+ONLY as second opinions after the in-session review exists, with G36 freshness (current
+bytes at dispatch) and G19 cost disclosure BEFORE the call. Their findings enter the
+report only after passing Phase 3 verification. They are never the primary reviewer —
+the local agent is, by standing order.
 
 ## Non-negotiables recap
 One file at a time · context pack first · jCodemunch for ALL search (never grep — index the
@@ -270,6 +278,6 @@ current bytes + sha recorded · a prior review is CONTEXT,
 never a skip · three empty model types = LOCKED until the bytes change (feature never
 locks) · manifests consulted before and updated after · every finding CONFIRMED or
 labeled PLAUSIBLE · debug = reproduce → hypothesize → verify → manifest · commit at close ·
-after a feature run the SCAN LADDER fires — M2 cross-family scan of every changed file
-(tests included), M3 third-model escalation on any HIGH, every pass context-loaded and
-new-findings-only.
+the LOCAL agent (in-session GLM) reviews every changed file (tests included) after a
+feature run; optional external passes ride the gate's pins, context-loaded and
+new-findings-only, only when the owner asks or approves the cost.
