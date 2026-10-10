@@ -1,0 +1,26 @@
+{
+ "type": "CLEAR",
+ "commit": "a1e8540e25de2289a1d60428e7505f51fc9fa1d7",
+ "caller": "zcode",
+ "when": "20261009-204823",
+ "files": {
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "f12a957e658413d743de8c337792f5022bcf55e2785e3c14e8cd76b35318ede7",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "CLEAR",
+   "when": "20261009-204820",
+   "artifact": ".adversary\\reviews\\gate_20261009-204820.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261009-204820.md": "model: deepseek/deepseek-v4.1-flash@baidu/fp8 | provider: Baidu | usage: {'prompt_tokens': 1199, 'completion_tokens': 644, 'total_tokens': 1843, 'cost': 0.0011325, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0011325, 'upstream_inference_prompt_cost': 0.0003597, 'upstream_inference_completions_cost': 0.0007728}, 'completion_tokens_details': {'reasoning_tokens': 405, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['plugins/colibri-review/.claude-plugin/plugin.json'] | caller: zcode\n\nReviewed the staged plugin.json against the diff:\n\n- JSON remains syntactically valid: the new `description` string is a single properly-quoted value with balanced braces/commas; `\\u2014` em-dash removed and a plain `-` used, no escaping hazard (no embedded quotes or backslashes). Trailing structure (`author`, `license`, `keywords`) unchanged and comma-balanced.\n- Version bump `0.5.0` \u2192 `0.6.0` is internally consistent (single occurrence in the file; nothing else in the provided bytes pins the old version).\n- Description claims align with the doctrine supplied for this repo (local agent as reviewer, external gate, three empty model types locking file+mode). No assertion in the new text contradicts a provided byte. The removal of the enumerated mode list and the scan-ladder sentence is a description-tightening edit, not a contract break visible in the supplied file set, and the `keywords` array still carries the corresponding terms.\n- No call sites, path references, or symbol assumptions are touched by a metadata-only edit.\n\nNo surviving defect found.\n\nVERDICT: CLEAR"
+ },
+ "artifacts_sha256": {
+  ".adversary\\reviews\\gate_20261009-204820.md": {
+   "embedded": "6040046b6c2bddef1afc2d1922f4fe33b1134cd0127962a2a9f7d6ae924f7bef",
+   "disk": "6040046b6c2bddef1afc2d1922f4fe33b1134cd0127962a2a9f7d6ae924f7bef"
+  }
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "a4d4ec383cfd942c2d69e09f12158027cf14d938ca013321311c67a1dbbfc1d5"
+}
