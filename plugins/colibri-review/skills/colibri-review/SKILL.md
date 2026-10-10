@@ -106,6 +106,11 @@ Assemble BEFORE reading the file body, and summarize it in the review header:
 - **Recent history:** last AGENT_STATE / session-log entries and recent commits touching
   the file — what changed lately is where bugs live.
 - Cap the pack at what fits comfortably; prefer call-site EVIDENCE over more breadth.
+- **Producing-caller evidence (owner order 2026-10-10, local-gate experiment #10):** for every
+  candidate finding, the pack carries WHO CAN PRODUCE the trigger — `find_references` on the
+  function that would pass the breaking input. A trigger no repo caller can produce (only an
+  external process, tool, or human does) makes the observation a hardening note, never a
+  defect-level finding.
 
 ## Phase 2 — The review pass (per mode; run `bug` unless told otherwise)
 Read the file end to end with line numbers. Then produce the mode's exact contract:
@@ -173,6 +178,28 @@ reality from Phase 1. Then mark it:
   explicit "unverified because ..." note. Never present as confirmed.
 - Refuted → DELETE (silently; a deleted wrong finding is a success, not a loss).
 Static-analysis inputs (pyflakes etc.) are hints, never findings, until traced.
+
+**The finding contract for CONFIRMED (owner order 2026-10-10, from local-gate
+experiment #10 — anchored findings measured 0 false positives over 15 clean replay
+rounds while every anchored true mutation was confirmed; near-miss file citations
+ran 30-50% of model findings):** every CONFIRMED finding carries the anchor quad,
+each field checkable against the current bytes —
+- **verbatim snippet**: code quoted EXACTLY from the file. A snippet that does not
+  appear verbatim in the current bytes means the finding is not anchored: PLAUSIBLE
+  at best, or invented — resolve cited paths against the ACTUAL file list before
+  citing (near-miss names corrected or the finding is unanchored).
+- **concrete trigger input**: the input/state that fires the mechanism. "None" =
+  hardening note, not a defect finding.
+- **producing caller**: the repo function that produces the trigger at runtime.
+- **broken behavior**: the observable outcome (exception, wrong value, wrong side
+  effect).
+**Execute instead of re-reason (same order):** when the target is pure Python and
+the trigger is concrete, materialize old/new versions (`git show` + the diff hunks)
+and RUN the trigger in a sandboxed child process — a behavior difference between
+old and new at the same input is proof; identical output refutes the claimed
+trigger. This settles wrong-value claims in seconds where re-reasoning has
+repeatedly failed. The gate's `adversary-gate/finding_adjudicator.py` is the
+production form; keep purity/nondeterminism guards around any execution.
 
 ## Phase D — Debug modality (when hunting a specific failure, not reviewing)
 Same laws + the debug ladder, in order, no skipping:
