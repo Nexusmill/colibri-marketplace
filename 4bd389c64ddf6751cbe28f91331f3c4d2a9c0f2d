@@ -1,0 +1,26 @@
+{
+ "type": "CLEAR",
+ "commit": "4bd389c64ddf6751cbe28f91331f3c4d2a9c0f2d",
+ "caller": "zcode",
+ "when": "20261010-135839",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "09fa519d1778a44114c9076f705d409c6e57522e8a8afdafb4fd3fe55e10cfb2",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "CLEAR",
+   "when": "20261010-135838",
+   "artifact": ".adversary\\reviews\\gate_20261010-135838.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261010-135838.md": "model: deepseek/deepseek-v4.1-flash@baidu/fp8 | provider: Baidu | usage: {'prompt_tokens': 1560, 'completion_tokens': 1771, 'total_tokens': 3331, 'cost': 0.0012940068, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0012940068, 'upstream_inference_prompt_cost': 0.000233532, 'upstream_inference_completions_cost': 0.0010604748}, 'completion_tokens_details': {'reasoning_tokens': 1438, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json'] | caller: zcode\n\nI examined the staged change to `.claude-plugin/marketplace.json`.\n\nChecks performed:\n- **Semantic equivalence of description change:** the diff replaces the literal U+2014 em-dash bytes with the JSON escape `\\u2014`. `\\u2014` is a valid JSON escape and decodes to exactly U+2014, so the parsed string is byte-for-byte identical before and after. No contract change for any consumer that parses the JSON.\n- **Version bump:** `colibri-review` goes 0.4.0 \u2192 0.4.1, consistent between the diff `+` line and the full staged file. The `adversary-gate` entry (0.3.6) is untouched. No in-file inconsistency (e.g., duplicated keys, mismatched quoted version) is present.\n- **JSON validity:** the staged bytes are well-formed \u2014 `$schema`, `name`, `owner`, and both `plugins[]` entries parse; no trailing comma; the only structural delta is the removed trailing newline, which is formatting and not a correctness defect for a JSON document.\n- **Manifest doctrine:** this change does not touch `.colibri_reviews/_manifest.json`, so no absolute-key/duplicate-row concern applies.\n- **External-plugin-version coupling:** I cannot and do not assert a `plugin.json` mismatch, since no such file is supplied and inventing that requirement is out of scope.\n\nNo logic error, broken reference, unhandled path, or contract break is introduced or enabled by these bytes.\n\nVERDICT: CLEAR"
+ },
+ "artifacts_sha256": {
+  ".adversary\\reviews\\gate_20261010-135838.md": {
+   "embedded": "63e95d4060a3ec3fd97806c14d9a30e4094dd17d1845f3986e9e363722384dbf",
+   "disk": "63e95d4060a3ec3fd97806c14d9a30e4094dd17d1845f3986e9e363722384dbf"
+  }
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "5565e805a53b795d6feb82835da51357865ec15782b249f31d7e8b6ae184c794"
+}
