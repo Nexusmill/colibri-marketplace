@@ -71,6 +71,27 @@ def _model():
     ) or ""
 
 
+def model_fingerprint():
+    """T4.4 (owner order 2026-10-09): cheap cache-key fingerprint of the ACTIVE
+    model - env override path, else the default's pinned sha prefix. Two runs
+    with the same fingerprint scan with byte-identical model weights for cache
+    purposes (the pin check inside scan() still enforces true integrity).
+    Carries SCAN_LOGIC_VERSION: bump it whenever scan()/scan_segmented's LOGIC
+    changes (prompt, chunking, post-processing) so cached clears produced by
+    older logic drop (gate round gate_20261009-085308 LOW)."""
+    env = os.environ.get("NEXUSMILL_DOCSCAN_MODEL")
+    if env:
+        try:
+            st = os.stat(env)
+            return "env:%s:%d:v%s" % (env, st.st_size, SCAN_LOGIC_VERSION)
+        except OSError:
+            return "env:%s:absent:v%s" % (env, SCAN_LOGIC_VERSION)
+    return "pinned:%s:v%s" % (_DEFAULT_MODEL_SHA[:16], SCAN_LOGIC_VERSION)
+
+
+SCAN_LOGIC_VERSION = "1"
+
+
 # Pinned identity of the DEFAULT model (G17). An adopter pointing NEXUSMILL_DOCSCAN_MODEL at
 # their own GGUF sets NEXUSMILL_DOCSCAN_MODEL_SHA (or leaves it blank to skip the pin).
 _DEFAULT_MODEL_SHA = "2fde00ce69dd4899c70d020845e2638353015bba0fdf161b3eb965f2bca4464e"
@@ -445,6 +466,37 @@ def scan(text):
         detail += " (CAPPED at %d - tail is pattern-floor-only, not semantically scanned)" % _MAX_CHUNKS
     return {"status": status, "detail": detail, "chunks": len(chunks), "capped": capped}
 
+
+
+def scan_segmented(text, max_chunks=24):
+    """T3.2 / hole H2 (gate top-to-bottom), BOUNDED (gate round gate_20261009-041145,
+    HIGH): scan added doc text of ANY size within a hard per-invocation CHUNK budget
+    (model-call granularity - the old single scan() call capped at _MAX_CHUNKS and
+    >25MB files were excluded outright). Splits at line boundaries into 6000-char
+    chunks, scans via the same pipeline in <=24-chunk scan() groups, stops at
+    max_chunks total: block wins, degraded propagates, capped=True (loud,
+    pattern-floor-only tail) when the text exceeds the budget - the commit path
+    NEVER multiplies model invocations beyond the budget (no local DoS)."""
+    chunks = _chunk(text or "", _MAX_CHUNK)
+    capped = len(chunks) > max_chunks
+    chunks = chunks[:max_chunks]
+    seg_size = _MAX_CHUNK * _MAX_CHUNKS          # per scan() call
+    total = 0
+    for start in range(0, len(chunks), _MAX_CHUNKS):
+        segment = "".join(chunks[start:start + _MAX_CHUNKS])
+        res = scan(segment)
+        total += res.get("chunks", 0)
+        if res["status"] == "block":
+            return dict(res, chunks=total,
+                        detail="segment %d: %s" % (start // _MAX_CHUNKS + 1,
+                                                   res.get("detail", "")))
+        if res["status"] == "degraded":
+            return dict(res, chunks=total)
+        capped = capped or bool(res.get("capped"))
+    detail = "scanned %d chunk(s) within the %d-chunk budget" % (total, max_chunks)
+    if capped:
+        detail += " (CAPPED - tail is pattern-floor-only, not semantically scanned)"
+    return {"status": "clear", "detail": detail, "chunks": total, "capped": capped}
 
 def _chunk(text, size):
     """Line-boundary chunks <= `size` chars. A single line LONGER than `size` (pasted blob /

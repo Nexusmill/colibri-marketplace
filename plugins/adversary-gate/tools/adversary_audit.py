@@ -30,8 +30,10 @@ check the evidence itself. Detection, not prevention - by design.
 """
 import argparse
 import hashlib
+import datetime
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -39,12 +41,15 @@ import sys
 CODE_EXTS = {".py", ".js", ".json", ".ts", ".jsx", ".tsx", ".html", ".css", ".ps1", ".sh", ".bat",
              ".c", ".cpp", ".h", ".rs", ".go", ".java", ".glsl", ".osl",
              # EV-029 (2026-09-04): ES-module / CommonJS / TS-module forms (parity with the gate)
-             ".mjs", ".cjs", ".mts", ".cts"}
+             ".mjs", ".cjs", ".mts", ".cts",
+             # OWNER RULING 2026-10-02 (parity with the gate): agent-modified .txt is reviewed
+             ".txt"}
 GATED_PREFIXES = (".githooks/", ".github/workflows/")
 # 2026-09-06: extensionless git hook files are code wherever they live (parity with the gate);
 # confined to commits after the per-repo rules epoch (see _hook_names_apply)
 HOOK_NAMES = ("pre-commit", "post-commit", "pre-push")
 RULES_EPOCH_FILE = os.path.join(".githooks", "adversary_rules_epoch")
+TEXT_RULES_EPOCH_FILE = os.path.join(".githooks", "adversary_text_rules_epoch")
 NOTES_REF = "refs/notes/adversary"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -65,15 +70,16 @@ def _git(repo, args, binary=False, check=True):
     return p.returncode, p.stdout.decode("utf-8", "replace")
 
 
-def _is_code(path, hook_names=True):
-    return (path.startswith(GATED_PREFIXES) or os.path.splitext(path)[1].lower() in CODE_EXTS
+def _is_code(path, hook_names=True, text_files=True):
+    ext = os.path.splitext(path)[1].lower()
+    return (path.startswith(GATED_PREFIXES) or (ext in CODE_EXTS and (ext != ".txt" or text_files))
             or (hook_names and os.path.basename(path) in HOOK_NAMES))
 
 
 _EPOCH_CACHE = {}
 
 
-def _epoch(repo):
+def _epoch(repo, rule="hook-names", epoch_file=RULES_EPOCH_FILE):
     """(sha, state) for the `hook-names <sha>` epoch line: state 'none' | 'ok' | 'moved' |
     'unreadable'. ANCHORED IN HISTORY (deepagents re-vendor gate round 1, gate_20260906-210758):
     the recorded sha must be an ancestor of EVERY commit that ever added the epoch file (order-
@@ -83,28 +89,39 @@ def _epoch(repo):
     commit yet and is trusted like the baseline (same local trust class). Shallow or unreadable
     history is 'unreadable' (fail closed). Memoized per repo: the walker asks once per commit."""
     key = os.path.normcase(os.path.abspath(repo))
+    if rule != "hook-names" or epoch_file != RULES_EPOCH_FILE:
+        key = (key, rule, epoch_file)
     if key in _EPOCH_CACHE:
         return _EPOCH_CACHE[key]
-    res = _epoch_uncached(repo)
+    res = _epoch_uncached(repo, rule, epoch_file)
     _EPOCH_CACHE[key] = res
     return res
 
 
-def _epoch_uncached(repo):
+def _epoch_uncached(repo, rule="hook-names", epoch_file=RULES_EPOCH_FILE):
     # The epoch is read from HEAD's TREE only - never from the working tree (Tools E gate round 1,
     # gate_20260906-223831): a working-tree read is case-folded on Windows/macOS and follows
     # symlinks, while the history anchor is exact, so a tracked case-variant or a symlinked
     # .githooks could satisfy the read without being the anchored blob. An uncommitted epoch
     # (the moment between the installer's write and the vendor commit) is 'uncommitted': the
     # rule applies to every commit until it is committed (fail closed, not a violation).
-    rel = RULES_EPOCH_FILE.replace("\\", "/")
+    rel = epoch_file.replace("\\", "/")
     rc, blob = _git(repo, ["show", "HEAD:" + rel], check=False)
     if rc != 0:
         return None, "uncommitted"
+    if rule == "text-files":
+        rc, entry = _git(repo, ["ls-tree", "HEAD", "--", ":(top)" + rel], check=False)
+        if rc != 0 or not entry.startswith(("100644 blob ", "100755 blob ")):
+            return None, "unreadable"
+        lines = [ln.split() for ln in blob.splitlines() if ln.strip()]
+        if len(lines) != 1 or len(lines[0]) != 2 or lines[0][0] != rule:
+            return None, "unreadable"
+        if not re.fullmatch(r"ROOT|[0-9a-f]{40}|[0-9a-f]{64}", lines[0][1]):
+            return None, "unreadable"
     sha = None
     for ln in blob.splitlines():
         parts = ln.split()
-        if len(parts) == 2 and parts[0] == "hook-names":
+        if len(parts) == 2 and parts[0] == rule:
             sha = parts[1]
     if not sha:
         return None, "none"
@@ -122,7 +139,7 @@ def _epoch_uncached(repo):
     if sha == "ROOT":
         return sha, "ok"              # ROOT skips ancestry checks, never the shallow-history check
     rc, out = _git(repo, ["log", "--full-history", "--diff-filter=A", "--format=%H", "--",
-                          ":(top)" + RULES_EPOCH_FILE.replace("\\", "/")], check=False)
+                          ":(top)" + rel], check=False)
     if rc != 0:
         return sha, "unreadable"
     adds = out.split()
@@ -148,6 +165,19 @@ def _hook_names_apply(repo, rev):
     return rc != 0              # ancestor-or-equal of the epoch -> old rules
 
 
+def _text_files_apply(repo, rev):
+    """Only an immutable, historically anchored marker can exempt legacy text blobs.
+
+    Missing/uncommitted, malformed, moved and shallow markers apply the rule everywhere.
+    Staged-file classification never consults this historical exception.
+    """
+    sha, state = _epoch(repo, "text-files", TEXT_RULES_EPOCH_FILE)
+    if state != "ok" or sha == "ROOT":
+        return True
+    rc, _ = _git(repo, ["merge-base", "--is-ancestor", rev, sha], check=False)
+    return rc != 0
+
+
 def _changed_code(repo, rev):
     """Changed CODE in `rev` vs its FIRST parent (root: vs the empty tree). Mirrors
     adversary_gate._changed_code_in_commit exactly: (files {new_path: sha256 of blob in
@@ -155,6 +185,7 @@ def _changed_code(repo, rev):
     rc, _ = _git(repo, ["rev-parse", "--verify", "--quiet", rev + "^1"], check=False)
     base = rev + "^1" if rc == 0 else EMPTY_TREE
     hn = _hook_names_apply(repo, rev)
+    text_files = _text_files_apply(repo, rev)
 
     def blob_sha(r, path):
         _, raw = _git(repo, ["show", r + ":" + path], binary=True)
@@ -172,28 +203,145 @@ def _changed_code(repo, rev):
             i += 1
             continue
         code = st[0]
-        if code in ("A", "C", "M", "T"):
+        if code in ("A", "M", "T"):
             path = toks[i + 1]
             i += 2
-            if _is_code(path, hn):
+            if _is_code(path, hn, text_files):
                 files[path] = blob_sha(rev, path)
-        elif code == "R":
+        elif code in ("R", "C"):
+            # gate round gate_20261009-151907: C (copy) records carry TWO paths
+            # exactly like R (C<score>\0SRC\0DST) - walking C in the single-path
+            # branch consumed only SRC and desynchronized the record stream. A
+            # copy never removes its source, so only R contributes a removal.
             old, new = toks[i + 1], toks[i + 2]
             i += 3
-            if _is_code(new, hn):
+            if _is_code(new, hn, text_files):
                 files[new] = blob_sha(rev, new)
-            if _is_code(old, hn) and not _is_code(new, hn):
+            if code == "R" and _is_code(old, hn, text_files) and not _is_code(new, hn, text_files):
                 removals["D:" + old] = blob_sha(base, old)
         elif code == "D":
             old = toks[i + 1]
             i += 2
-            if _is_code(old, hn):
+            if _is_code(old, hn, text_files):
                 removals["D:" + old] = blob_sha(base, old)
         else:
             i += 2
     files.update(removals)
     return files
 
+
+def _verify_chain_mac(repo, rev, ref, note):
+    """T3.3 / hole H1: verify the note's HMAC chain binding. Returns None when
+    valid/legacy/unkeyed, or a problem string that escalates the finding.
+    Legacy: notes without a mac whose notarization predates the key's creation
+    stamp are 'legacy-unsigned' - expected history, NOT a violation. A note
+    CARRYING a mac that does not verify, or one whose embedded artifact hashes
+    no longer match, is a violation (the tripwire fires)."""
+    import hashlib
+    import hmac as _h
+    key_p = os.path.join(repo, ".adversary", "note_hmac.key")
+    key = None
+    key_created = note.get("mac_key_created", "")
+    try:
+      if os.path.isfile(key_p):
+        for ln in open(key_p, encoding="utf-8", errors="replace").read().splitlines():
+            t = ln.strip()
+            if len(t) == 64:
+                try:
+                    key = bytes.fromhex(t)
+                except ValueError:
+                    key = None   # corrupt hex: degrade to unverifiable-mac
+            elif ln.startswith("# created="):
+                key_created = key_created or ln.split("=", 1)[1].strip()
+    except OSError:
+        key = None            # unreadable key: degrade, never crash
+    mac = note.get("mac")
+    if not mac:
+        # legacy exemption with FORMAT-NORMALIZED dates: note stamps are
+        # %Y%m%d-%H%M%S and the key stamp is ISO - compare like with like
+        # (gate round gate_20261009-053337 HIGH: the raw string compare was
+        # always False, flagging every legacy note as forged)
+        when = str(note.get("when", ""))
+        try:
+            when_iso = datetime.datetime.strptime(when[:15], "%Y%m%d-%H%M%S").date().isoformat()
+        except ValueError:
+            when_iso = ""
+        # same-DAY pre-key notes are legacy too: the key stamp carries only day
+        # granularity, so a note stamped earlier the SAME day is indistinguishable
+        # from post-key - exempt on <= (gate round gate_20261009-065049 MEDIUM)
+        if key is None or (key_created and when_iso and when_iso <= key_created[:10]):
+            return None            # legacy note (pre-key) or unkeyed repo
+        return "note has no chain mac but the key predates it (forged?)"
+    # key-stamp identity: a note signed by a DIFFERENT key (multi-clone history,
+    # re-keyed machine) is UNVERIFIABLE here, not forged - degrade loud, never
+    # a violation (gate round gate_20261009-060518 HIGH)
+    local_stamp = ""
+    try:
+        if os.path.isfile(key_p):
+            for ln in open(key_p, encoding="utf-8", errors="replace").read().splitlines():
+                if ln.startswith("# created="):
+                    local_stamp = ln.split("=", 1)[1].strip()
+    except OSError:
+        key = None         # unreadable key: degrade to unverifiable (gate
+                          # round gate_20261009-062031 LOW), never crash the tripwire
+    note_stamp = note.get("mac_key_created") or ""
+    # unverifiable (degrade, never a violation): no local key (clone/CI -
+    # gate_20261009-053337 HIGH), or either stamp missing. When BOTH stamps are
+    # present and DIFFER, the note is either foreign-key signed (multi-clone
+    # history) or forged - this machine cannot distinguish, so it degrades too
+    # (gate_20261009-063510 MEDIUM: a forged note may omit the stamp entirely;
+    # stampless = unverifiable here, and the future --strict-mac ruling can
+    # tighten all three).
+    if key is None or not note_stamp or not local_stamp or note_stamp != local_stamp:
+        # also covers the no-key clone (.adversary never cloned - CI is the
+        # auditor primary deployment, gate_20261009-053337 HIGH)
+        return None
+        # a future owner ruling may add --strict-mac to make this fatal
+    prior = "GENESIS"
+    rc, log = _git(repo, ["log", "--format=%H", rev], check=False)
+    for c in (log.split()[1:] if rc == 0 else []):
+        rc2, raw = _git(repo, ["notes", "--ref", ref, "show", c], check=False)
+        if rc2 != 0:
+            continue
+        try:
+            pn = json.loads(raw)
+        except ValueError:
+            continue
+        if pn.get("mac"):
+            prior = pn["mac"]
+            break
+    body = dict(note)
+    body.pop("mac", None)
+    payload = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    want = _h.new(key, (payload + "|" + prior).encode("utf-8"), "sha256").hexdigest()
+    if want != mac:
+        return "chain mac mismatch (note body or prior note tampered)"
+    arts = note.get("artifacts_sha256") or {}
+    import hashlib as _hl
+    for rel, shas in arts.items():
+        if shas.get("embedded") != shas.get("disk"):
+            return "embedded artifact %s hash mismatch (forged evidence)" % rel
+        # LIVE disk check: post-notarization tampering of the evidence file
+        # (record cannot catch a pre-record tamper - it reads both sides from
+        # the same bytes; the note is the anchor, the auditor is the witness)
+        live_p = os.path.join(repo, rel.replace("/", os.sep))
+        if not os.path.isfile(live_p):
+            # .adversary is gitignored transient state - fresh clones/CI never
+            # have the evidence files; the EMBEDDED hashes still verify the note
+            # body self-consistency. Absence is unverifiable, not tampering
+            # (gate round gate_20261009-063510 HIGH).
+            continue
+        try:
+            live_s = open(live_p, encoding="utf-8", errors="replace").read()[:100_000]
+        except OSError:
+            live_s = ""
+        live_sha = _hl.sha256(live_s.encode("utf-8", "replace")).hexdigest()
+        if live_sha != shas.get("disk"):
+            return "artifact %s changed on disk after notarization (tampered evidence)" % rel
+    return None
+
+def root_abs(repo):
+    return repo if os.path.isabs(repo) else os.path.abspath(repo)
 
 def _audit_commit(repo, rev, ref):
     """Returns (kind, detail): 'clean' | 'skip' (no code) | 'override' | 'violation'."""
@@ -218,6 +366,9 @@ def _audit_commit(repo, rev, ref):
             problems.append("%s: note sha does not match the committed blob (forged/stale note)" % key)
     if problems:
         return "violation", "; ".join(problems)
+    mac_problem = _verify_chain_mac(root_abs(repo), rev, ref, note)
+    if mac_problem:
+        return "violation", "NOTE INTEGRITY: " + mac_problem
     if note.get("type") == "OVERRIDE":
         return "override", "owner override, reason: %s" % (note.get("reason", "")[:200] or "(none)")
     if note.get("type") != "CLEAR":
@@ -284,6 +435,11 @@ def main(argv=None):
         _, out = _git(root, ["rev-list", "--reverse", baseline + "..HEAD"])
     revs = [r for r in out.split() if r]
     violations, overrides, audited = [], [], 0
+    text_sha, text_state = _epoch(root, "text-files", TEXT_RULES_EPOCH_FILE)
+    if text_state in ("moved", "unreadable"):
+        violations.append({"commit": "text-rules-epoch", "subject": TEXT_RULES_EPOCH_FILE,
+                           "detail": "text rules epoch %s (%s); every text commit is audited" %
+                                     (text_state.upper(), text_sha or "invalid marker")})
     ep_sha, ep_state = _epoch(root)
     if ep_state in ("moved", "unreadable"):
         # the epoch file was rewritten to a sha that is not an ancestor of every commit that

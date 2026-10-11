@@ -9,8 +9,8 @@
     {
       "name": "adversary-gate",
       "source": "./plugins/adversary-gate",
-      "description": "A mandatory adversarial commit gate: no code commit without an independent external model's VERDICT CLEAR keyed to the exact staged bytes; durable git-notes evidence on every commit; a push guard that refuses un-evidenced history; CI re-audit. Detection is the guarantee - prevention is not claimed.",
-      "version": "0.3.6",
+      "description": "A mandatory adversarial commit gate: no code commit without an independent external model's VERDICT CLEAR keyed to the exact staged bytes; durable git-notes evidence on every commit; a push guard; CI re-audit. Now arms via git 2.54+ config-based hooks (config_hooks.py) alongside the hooksPath installers. Detection is the guarantee.",
+      "version": "0.3.7",
       "author": {
         "name": "Nexusmill"
       },
