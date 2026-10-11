@@ -1,0 +1,75 @@
+{
+ "type": "CLEAR",
+ "commit": "b7db336b8fe6b5a19b5ac424d0ae67e9014b71e5",
+ "caller": "zcode",
+ "when": "20261011-100658",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "5cefbb8b4e9d07f82a0533923bbbab8ddc19ff899a621b8e03c69ff11813b145",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "CLEAR",
+   "when": "20261011-100654",
+   "artifact": ".adversary\\reviews\\gate_20261011-100654.md"
+  },
+  "plugins/adversary-gate/tools/adversary_audit.py": {
+   "sha": "3e9c4cfd8514dd017edcb0fae5a43b9fb2938bf10daf18c2caf2e2c9e781be76",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "CLEAR",
+   "when": "20261011-100654",
+   "artifact": ".adversary\\reviews\\gate_20261011-100654.md"
+  },
+  "plugins/adversary-gate/tools/adversary_gate.py": {
+   "sha": "11cab53cdaea9e93f48c37e9d5457201a9cd36525e9d277cefe36b444168d218",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "CLEAR",
+   "when": "20261011-100654",
+   "artifact": ".adversary\\reviews\\gate_20261011-100654.md"
+  },
+  "plugins/adversary-gate/tools/docscan.py": {
+   "sha": "1e01fa3c1ac61f5bb896769ccb1d8f9e3e5410c3ca8d24d553dad493cecb3a3a",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "CLEAR",
+   "when": "20261011-100654",
+   "artifact": ".adversary\\reviews\\gate_20261011-100654.md"
+  },
+  "plugins/adversary-gate/tools/finding_adjudicator.py": {
+   "sha": "3f63047be1ec691794367f0b7dda474e8979658e0ec130d0090b910e2a2d3de5",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "CLEAR",
+   "when": "20261011-100654",
+   "artifact": ".adversary\\reviews\\gate_20261011-100654.md"
+  },
+  "plugins/adversary-gate/tools/gate_selftest.py": {
+   "sha": "1ec32a1199aa7092a960d76b6b8b010f11822cc85f3924271fb0bd8855443aae",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "CLEAR",
+   "when": "20261011-100654",
+   "artifact": ".adversary\\reviews\\gate_20261011-100654.md"
+  },
+  "plugins/adversary-gate/tools/harness_guard.py": {
+   "sha": "a4fc35daa42bea56c283f316a3828e98b8da4f1571bc2ce19248addf95cf1681",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "CLEAR",
+   "when": "20261011-100654",
+   "artifact": ".adversary\\reviews\\gate_20261011-100654.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261011-100654.md": "model: tencent/hy4-preview@tencent/fp8 | provider: Tencent | usage: {'prompt_tokens': 193970, 'completion_tokens': 42684, 'total_tokens': 236654, 'cost': 0.268523664, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.268523664, 'upstream_inference_prompt_cost': 0.16177098, 'upstream_inference_completions_cost': 0.106752684}, 'completion_tokens_details': {'reasoning_tokens': 42676, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/tools/adversary_audit.py', 'plugins/adversary-gate/tools/adversary_gate.py', 'plugins/adversary-gate/tools/docscan.py', 'plugins/adversary-gate/tools/finding_adjudicator.py', 'plugins/adversary-gate/tools/gate_selftest.py', 'plugins/adversary-gate/tools/harness_guard.py'] | caller: zcode\n\nVERDICT: CLEAR"
+ },
+ "adjudication": {
+  "denial": "reviews/gate_20261011-093046.md",
+  "outcomes": {
+   "fixed": 2
+  },
+  "detail": ".adversary/adjudications.json"
+ },
+ "artifacts_sha256": {
+  ".adversary\\reviews\\gate_20261011-100654.md": {
+   "embedded": "aeb024f2f01fb2e88dd0fab207bb6a8e8c5690f4c024e0c63c64ba744bc721bb",
+   "disk": "aeb024f2f01fb2e88dd0fab207bb6a8e8c5690f4c024e0c63c64ba744bc721bb"
+  }
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "8c10bf4ce6ca0e465c8b644a55b691b81bc64066bf90879aeacdd4bd78b95a14"
+}
