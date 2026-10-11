@@ -1,0 +1,54 @@
+{
+ "type": "CLEAR",
+ "commit": "20b5a5638fe452191f7cbc31cdf7eb71fb2fe8dc",
+ "caller": "zcode",
+ "when": "20261011-115641",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "8c06316dc28ce461f6f30dbd845f110971a0f720e9eb6f6c1f5e0d9d64a56c46",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "WARN",
+   "when": "20261011-115638",
+   "artifact": ".adversary\\reviews\\gate_20261011-115638.md"
+  },
+  "plugins/adversary-gate/tools/config_hooks.py": {
+   "sha": "a6e1f215501f7d8282b0ad471f822538aad60c992d75487cf1ca6dcf9bacf5e8",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "WARN",
+   "when": "20261011-115638",
+   "artifact": ".adversary\\reviews\\gate_20261011-115638.md"
+  },
+  "plugins/adversary-gate/tools/enforcement_runtime.py": {
+   "sha": "8699ac219a883661aeeff99626675b56e843e3e14071752d316ae6eb8b15238a",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "WARN",
+   "when": "20261011-115638",
+   "artifact": ".adversary\\reviews\\gate_20261011-115638.md"
+  },
+  "plugins/adversary-gate/tools/runtime_loader.py": {
+   "sha": "a91b20af6748e832a08e10319eb89e88756685ec9f088a70762eb181c50c1513",
+   "model": "tencent/hy4-preview@tencent/fp8",
+   "verdict": "WARN",
+   "when": "20261011-115638",
+   "artifact": ".adversary\\reviews\\gate_20261011-115638.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261011-115638.md": "model: tencent/hy4-preview@tencent/fp8 | provider: Tencent | usage: {'prompt_tokens': 30272, 'completion_tokens': 33341, 'total_tokens': 63613, 'cost': 0.0977694201, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.0977694201, 'upstream_inference_prompt_cost': 0.0227221632, 'upstream_inference_completions_cost': 0.0750472569}, 'completion_tokens_details': {'reasoning_tokens': 33106, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/tools/config_hooks.py', 'plugins/adversary-gate/tools/enforcement_runtime.py', 'plugins/adversary-gate/tools/runtime_loader.py'] | caller: zcode\n\nLOW, plugins/adversary-gate/tools/config_hooks.py, arm() broader-scope success return (the `return True, (\"already armed via %s-scope config hooks (%d event(s))%s%s\" ...)` statement), trigger: run `config_hooks.py --arm <repo>` (optionally with `--force`) when the gate is already armed at a broader scope (global/system) with all four entries and either no hooksPath pins exist or `--force` is supplied; the tool retires local pins/entries and returns success. Impact: the success message formats `len(names)` \u2014 the count of armed hook *entries* (4: pre-commit, post-commit record, post-commit activate, pre-push) \u2014 as \u201cevent(s)\u201d, so it reports \u201c4 event(s)\u201d even though only 3 git events (pre-commit, post-commit, pre-push) exist; the fresh-arm path correctly reports 3 event(s) via `len(EVENTS)`. The mislabeled count misleads the operator about the armed state (entries vs events), with no functional enforcement impact.\n\nVERDICT: WARN"
+ },
+ "adjudication": {
+  "denial": "reviews/gate_20261011-114151.md",
+  "outcomes": {
+   "fixed": 3
+  },
+  "detail": ".adversary/adjudications.json"
+ },
+ "artifacts_sha256": {
+  ".adversary\\reviews\\gate_20261011-115638.md": {
+   "embedded": "06a12a69cf439160439100da9ba6eb63f237b157fa0e572af6acdac9e1798df4",
+   "disk": "06a12a69cf439160439100da9ba6eb63f237b157fa0e572af6acdac9e1798df4"
+  }
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "99f02ed00fcc24d6667c76bee4128511cf45a38f3cf3fd266f465f7e21769678"
+}
