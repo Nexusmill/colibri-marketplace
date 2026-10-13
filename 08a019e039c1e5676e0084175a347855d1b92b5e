@@ -1,0 +1,26 @@
+{
+ "type": "CLEAR",
+ "commit": "08a019e039c1e5676e0084175a347855d1b92b5e",
+ "caller": "zcode",
+ "when": "20261013-120434",
+ "files": {
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "28e3cb9245d5ff67a554797ee1c454245a23bec928e8d9ecb7cd40cd9367cd0d",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "CLEAR",
+   "when": "20261013-120432",
+   "artifact": ".adversary\\reviews\\gate_20261013-120432.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261013-120432.md": "model: deepseek/deepseek-v4.1-flash@baidu/fp8 | provider: Baidu | usage: {'prompt_tokens': 1085, 'completion_tokens': 1080, 'total_tokens': 2165, 'cost': 0.00050013048, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 512, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.00050013048, 'upstream_inference_prompt_cost': 5.949048e-05, 'upstream_inference_completions_cost': 0.00044064}, 'completion_tokens_details': {'reasoning_tokens': 747, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['plugins/colibri-review/.claude-plugin/plugin.json'] | caller: zcode\n\nThe staged change is a version bump (`0.6.0` \u2192 `0.7.0`) plus a trailing-newline fix in `plugins/colibri-review/.claude-plugin/plugin.json`.\n\nChecks performed against the provided bytes:\n\n- **Staged file vs. diff consistency**: The staged file's `version` is `0.7.0`, matching the `+` line; every context line (name, description, author, license, keyword list and their order) is byte-identical to the unchanged lines shown in the diff. No hidden or dropped edits.\n- **JSON validity**: The document parses (object with string/array/object members, comma placement correct, trailing newline harmless).\n- **Semver**: `0.7.0` is a well-formed `MAJOR.MINOR.PATCH`; a minor bump is a legal successor to `0.6.0`.\n- **No stale-version self-reference**: Nothing in the provided file (name, description, keywords) embeds the old version string, so no internal mismatch is introduced.\n- **Call-site impact**: The file is a plugin manifest consumed for identity/metadata; nothing in the supplied bytes derives behavior from the version value in a way a minor bump would break. No cross-file version pin is present in the provided material to contradict it.\n\nNo defect introduced or enabled by this change survives verification. Matters such as a `marketplace.json`/changelog entry elsewhere in the tree cannot be adjudicated from the provided bytes, and absent evidence they are not findings.\n\nVERDICT: CLEAR"
+ },
+ "artifacts_sha256": {
+  ".adversary\\reviews\\gate_20261013-120432.md": {
+   "embedded": "51bcc24d741a6c5b40052ba763301cfc3d7676fec6a1dfc305ab8e0d6517ed29",
+   "disk": "51bcc24d741a6c5b40052ba763301cfc3d7676fec6a1dfc305ab8e0d6517ed29"
+  }
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "4854a65494989385e085dbfbccb885a9392196339f7fa065337198604474d726"
+}
