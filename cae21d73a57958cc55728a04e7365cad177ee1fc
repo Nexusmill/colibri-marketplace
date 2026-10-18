@@ -1,0 +1,33 @@
+{
+ "type": "CLEAR",
+ "commit": "cae21d73a57958cc55728a04e7365cad177ee1fc",
+ "caller": "zcode",
+ "when": "20261018-170443",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "17e91f3a2b51d087b679291fb4f666b382c41542176ad5f11b572429a89fa6ba",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "CLEAR",
+   "when": "20261018-170440",
+   "artifact": ".adversary\\reviews\\gate_20261018-170440.md"
+  },
+  "plugins/colibri-review/.claude-plugin/plugin.json": {
+   "sha": "86f509e29816f9f0448bdd442970201fe7cf3248dbcc8ff0929a7b3f6f9d7c53",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "CLEAR",
+   "when": "20261018-170440",
+   "artifact": ".adversary\\reviews\\gate_20261018-170440.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261018-170440.md": "model: deepseek/deepseek-v4.1-flash@baidu/fp8 | provider: Baidu | usage: {'prompt_tokens': 2274, 'completion_tokens': 3869, 'total_tokens': 6143, 'cost': 0.005099208, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 768, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.005099208, 'upstream_inference_prompt_cost': 0.000456408, 'upstream_inference_completions_cost': 0.0046428}, 'completion_tokens_details': {'reasoning_tokens': 3340, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/colibri-review/.claude-plugin/plugin.json'] | prompt: gate/adversary-review@1 (langfuse) | caller: zcode\n\n**Review of the staged change set** (`.claude-plugin/marketplace.json` + `plugins/colibri-review/.claude-plugin/plugin.json`)\n\nChecks performed against the supplied bytes:\n\n1. **Version consistency between the two manifests.** `marketplace.json` post-image carries `\"version\": \"0.7.1\"` for the `colibri-review` entry; `plugin.json` post-image carries `\"version\": \"0.7.1\"`. The two agree. The pre-change divergence (marketplace 0.4.1 vs plugin 0.7.0) is removed by this change, not introduced.\n\n2. **Diff post-image vs. full staged file.** Both hunks' added lines appear verbatim in the full staged files: `\"version\": \"0.7.1\",` in marketplace.json, and the `0.7.1` line plus the appended `Phase-1 context packs query the RSI prevention ruleset (advisory, budget-capped; findings may cite RSI-nnnn).` sentence in plugin.json. No hidden/extra edits beyond what the diff shows.\n\n3. **JSON validity.** Both staged files parse cleanly \u2014 balanced braces/brackets, comma placement correct at every object/array boundary (including the `plugins` array separating the `adversary-gate` and `colibri-review` entries), and the `\\u2014` escapes in the marketplace description are valid JSON string escapes.\n\n4. **Untouched sibling entry.** The `adversary-gate` entry (version `0.3.8`) is unmodified by this diff; nothing in the change touches its fields, source path, or keywords.\n\n5. **Description divergence.** marketplace.json and plugin.json descriptions differ (the marketplace text retains the scan-ladder sentence; plugin.json adds the RSI sentence). This divergence pattern pre-exists this change (the scan-ladder sentence was already marketplace-only before the diff), so the change does not introduce a new contract break \u2014 it follows the existing shape. It is not a defect in this change.\n\n6. **Unverifiable capability claims.** The appended RSI sentence describes a capability whose implementation lives outside the two files supplied. No supplied byte contradicts it, and the review contract forbids treating missing unrelated files as defects; I therefore do not raise it.\n\nNo concrete input, state, or sequence reachable from this change produces a wrong result, break, or exposure. No fabrication of the reviewed bytes is present.\n\nVERDICT: CLEAR"
+ },
+ "artifacts_sha256": {
+  ".adversary\\reviews\\gate_20261018-170440.md": {
+   "embedded": "ed993439bfc9a7a474a612c7671b79da105d5c1d18fb95e9116f9ed2c3409820",
+   "disk": "ed993439bfc9a7a474a612c7671b79da105d5c1d18fb95e9116f9ed2c3409820"
+  }
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "9f7c2e377f78a9c84a7b719493e5a6c102946dedc8343041c0a78542b2f2c0c6"
+}
