@@ -1,0 +1,89 @@
+{
+ "type": "CLEAR",
+ "commit": "ef0055bf3b0317d00d13c00e7d73a14927bbc8cd",
+ "caller": "zcode",
+ "when": "20261018-072603",
+ "files": {
+  ".mcp.json": {
+   "sha": "e9a5750beedf1920bde578dfaa0c73ce940b3a7ec1df6356c826308fe813b069",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "WARN",
+   "when": "20261018-072558",
+   "artifact": ".adversary\\reviews\\gate_20261018-072558.md"
+  },
+  ".repo-memory.json": {
+   "sha": "56c3a34b8da20f3b3e7b211a91ca149094d0a021f30d79536b039b18c487009c",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "WARN",
+   "when": "20261018-072558",
+   "artifact": ".adversary\\reviews\\gate_20261018-072558.md"
+  },
+  ".zcode/config.json": {
+   "sha": "c5e36b7b76324d844713e8c43e04341b947e01716038658b46f9a2f219132937",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "WARN",
+   "when": "20261018-072558",
+   "artifact": ".adversary\\reviews\\gate_20261018-072558.md"
+  },
+  "tests/test_zcode_twin.py": {
+   "sha": "4d7d7b7801a5d0246393d513d91d67e3e464267fa82ebef9f382dccb593ca25c",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "WARN",
+   "when": "20261018-072558",
+   "artifact": ".adversary\\reviews\\gate_20261018-072558.md"
+  },
+  "zcode/session_health.py": {
+   "sha": "31176dd92d9d32bcfbaeec887d4d2bbc631eb1880f8313c99ce2b8b3e311f485",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "WARN",
+   "when": "20261018-072558",
+   "artifact": ".adversary\\reviews\\gate_20261018-072558.md"
+  },
+  "zcode/zcode_grounding.ps1": {
+   "sha": "d6f5c35619232593c9dae3c127413887de9cb896c405efc5415bbd38119b53fc",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "WARN",
+   "when": "20261018-072558",
+   "artifact": ".adversary\\reviews\\gate_20261018-072558.md"
+  },
+  "zcode/zcode_jcm_guard.ps1": {
+   "sha": "ac3bcd8368580850d9cc650d04e3706cc793f76f5f3a2dcc9838e9fa72c48707",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "WARN",
+   "when": "20261018-072558",
+   "artifact": ".adversary\\reviews\\gate_20261018-072558.md"
+  },
+  "zcode/zcode_jcm_mark.ps1": {
+   "sha": "de3d23a2be897aa96160ac557f404dd05060b020c05b7daaf90474d23aadae77",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "WARN",
+   "when": "20261018-072558",
+   "artifact": ".adversary\\reviews\\gate_20261018-072558.md"
+  },
+  "zcode/zcode_repo_guards.ps1": {
+   "sha": "f9bef563d12c99f19b94f7f5d53ec65955c44a7ee71cc753521a79a23bc3c77a",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "WARN",
+   "when": "20261018-072558",
+   "artifact": ".adversary\\reviews\\gate_20261018-072558.md"
+  },
+  "zcode/zcode_stop_gate.mjs": {
+   "sha": "bfec19b056abd6f52c35bffd9e534191df735bb65df0653ceb9fcbd4356676b5",
+   "model": "deepseek/deepseek-v4.1-flash@baidu/fp8",
+   "verdict": "WARN",
+   "when": "20261018-072558",
+   "artifact": ".adversary\\reviews\\gate_20261018-072558.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261018-072558.md": "model: deepseek/deepseek-v4.1-flash@baidu/fp8 | provider: Baidu | usage: {'prompt_tokens': 67292, 'completion_tokens': 65176, 'total_tokens': 132468, 'cost': 0.098173008, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 768, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.098173008, 'upstream_inference_prompt_cost': 0.019961808, 'upstream_inference_completions_cost': 0.0782112}, 'completion_tokens_details': {'reasoning_tokens': 64288, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.mcp.json', '.repo-memory.json', '.zcode/config.json', 'tests/test_zcode_twin.py', 'zcode/session_health.py', 'zcode/zcode_grounding.ps1', 'zcode/zcode_jcm_guard.ps1', 'zcode/zcode_jcm_mark.ps1', 'zcode/zcode_repo_guards.ps1', 'zcode/zcode_stop_gate.mjs'] | prompt: gate/adversary-review@1 (langfuse) | caller: zcode\n\nI reviewed the full staged bytes of all nine files: the two JSON configs, the five ZCode hook scripts, the Python health/ingest tool, and the twin test suite. I traced the guard regexes and the grounding budget arithmetic against the tests' inputs, and verified the config JSON's bracket/comma balance by hand.\n\nFindings:\n\n**LOW \u2014 tests/test_zcode_twin.py, `GroundingTests.test_health_precedes_snapshot`**\nOffending line: ``        self.assertLess(ctx.find(\"MARKETPLACE REPO HEALTH\"), ctx.find(\"snapshot from AGENTS.md\"))``\nTrigger: when the marketplace health block is the `Invoke-Bounded` fallback (a designed fail-open state \u2014 `python` unresolvable, or the 12 s child bound exceeded), the payload contains the fallback note `\"(colibri-marketplace health unavailable - budget exceeded...)\"`, not the assess output. `ctx.find(\"MARKETPLACE REPO HEALTH\")` then returns `-1`, and `-1 < idx_of_snapshot_header` makes the ordering assertion pass without the ordering ever being exercised.\nImpact: a false-green on the \"health precedes snapshot\" contract in exactly the degraded state it is meant to cover. Harm is informational only \u2014 the sibling `test_emits_strict_ascii_json_with_contract_blocks` still asserts `assertIn(\"MARKETPLACE REPO HEALTH\", ctx)`, so the suite as a whole remains red in that state.\n\n**LOW \u2014 zcode/session_health.py + zcode/zcode_grounding.ps1, `_git` per-call bound vs. child wall-clock bound**\nOffending lines: ``                       text=True, timeout=6)`` and ``    $health = Invoke-Bounded 'python' ('-B \"' + $healthPy + '\" assess') 12 '(colibri-marketplace health unavailable - budget exceeded; run zcode/session_health.py assess directly)'``\nTrigger: `assess` issues two git calls back-to-back (`git status --porcelain`, then `git log -1 --format=%ct`), each bounded at 6 s. If each real call runs just under its bound (e.g. ~5.5\u20135.9 s on a large worktree / cold or slow filesystem), the child needs ~11.8 s plus interpreter startup and git spawn overhead, which crosses the parent's 12 s `Invoke-Bounded` budget; the parent then runs `taskkill /T` and returns the fallback. (If a single call actually hits 6 s the first call throws and the second is skipped, so this needs *both* calls near-but-under 6 s.)\nImpact: on such a host the authoritative marketplace health block degrades to \"unavailable\" on every session start and the marketplace ledger is not refreshed \u2014 i.e. the G42 verdict the guard reads can go stale. Fails open (no block), so degradation, not corruption.\n\nI verified and discarded the following hypotheses (all hold):\n- `.zcode/config.json` is structurally valid JSON: the two `PreToolUse` elements are comma-separated, and the trailing `}` `]` `}` `]` `}` `}` `}` sequence balances the objects/arrays (root \u2192 hooks \u2192 events \u2192 Stop array).\n- The grounding budget algebra cannot overflow: with `cap = 9943 - ctx.Length`, the post-snapshot payload is a constant ~9980 (< 10000) whenever `rawSnap \u2265 cap`, so the final guard (and its end-cutting second branch) never fires and the `snapshot truncated` marker survives \u2014 matching `test_huge_state_file_keeps_snapshot_within_budget`.\n- The G42 apparatus regex is `.git[\\\\/]`-anchored, so `.gitignore` is allowed and `.git/hooks/...` denied, as `test_g42_fail_arm_shapes` requires; the flag-name/content match in the one-shot unlock reproduces the same hash the test models.\n- The G43 Bash/Write paths and the G6 scope/exemption tests exercise the exact predicates in the shipped scripts.\n\nVERDICT: WARN"
+ },
+ "artifacts_sha256": {
+  ".adversary\\reviews\\gate_20261018-072558.md": {
+   "embedded": "cde651aef8c33a1096c03f5542ff16306f40d7661a8a37d9fc1cc58a21c9e29f",
+   "disk": "cde651aef8c33a1096c03f5542ff16306f40d7661a8a37d9fc1cc58a21c9e29f"
+  }
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "a25667b9fbefad4bc9dcf3a11fc9bf8d6d5b8a6955f4c713fa4f32ec45316ecf"
+}
