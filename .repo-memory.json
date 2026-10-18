@@ -1,0 +1,22 @@
+{
+  "name": "colibri-marketplace",
+  "db_path": "E:/repo-memory/colibri_marketplace",
+  "table": "memory",
+  "categories": [
+    "architecture",
+    "build_system",
+    "gotcha",
+    "workflow",
+    "tools_and_env",
+    "decision",
+    "api",
+    "testing",
+    "performance",
+    "review",
+    "general"
+  ],
+  "autoindex": {
+    "docs": true,
+    "reviews": true
+  }
+}
