@@ -1,7 +1,7 @@
 {
   "name": "colibri-review",
-  "version": "0.7.0",
-  "description": "A rigorous, context-aware code review & debug protocol: one file at a time, context before code, adversarially verified findings, five modes. The LOCAL agent (in-session GLM) is THE reviewer (owner order 2026-10-09); external passes are optional second opinions riding the gate pins; the gate stays always external - deliberate non-unification. Three empty model types still lock a file+mode until its bytes change.",
+  "version": "0.7.1",
+  "description": "A rigorous, context-aware code review & debug protocol: one file at a time, context before code, adversarially verified findings, five modes. The LOCAL agent (in-session GLM) is THE reviewer (owner order 2026-10-09); external passes are optional second opinions riding the gate pins; the gate stays always external - deliberate non-unification. Three empty model types still lock a file+mode until its bytes change. Phase-1 context packs query the RSI prevention ruleset (advisory, budget-capped; findings may cite RSI-nnnn).",
   "author": {
     "name": "Nexusmill"
   },

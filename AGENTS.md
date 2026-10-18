@@ -47,3 +47,11 @@ machine-wide repo-memory plugin). jCodemunch repo id: Nexusmill/colibri-marketpl
      (machine, business hard rules, protocols). If your harness did not
      inline it, READ that file now - the ZCode skill gate (G-MEM) will deny
      the first mutating work in this repo until the Read is on record. -->
+
+- 2026-10-18: colibri-review 0.7.1 released - the RSI enjoinder sync (canonical Phase-1 pack
+  queries the RSI prevention ruleset; findings may cite RSI-nnnn; rules sharpen, never gate)
+  plus posture-step parity. BOTH SKILL.md copies rotated to canonical bytes - the 0.7.0
+  release had updated only the root copy, leaving skills/ at 0.4.1-era bytes (drift
+  repaired); marketplace.json colibri-review re-aligned 0.4.1 -> 0.7.1; installed cache
+  0.7.1 rotated. OWNER NOTE: the plugin now ships two SKILL.md copies (root + skills/)
+  - consider collapsing to skills/ only in a future release.

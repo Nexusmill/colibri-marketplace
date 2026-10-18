@@ -60,9 +60,10 @@ single-file reviewer can never have — repo context, manifests, and a verificat
   plan can LOCK (feature mode is EXEMPT — features are infinite, owner
   2026-09-14; it hunts forever and never locks). When THREE DIFFERENT model
   types — distinct model families (the in-session model [the standing reviewer],
-  deepseek-v4.1-flash [gate tier 1, optional external], hy4-preview [gate tier 2,
-  optional external] are the three houses — kimi-k2.7-code is the terminal
-  distinct house; two versions of one family count as ONE
+  deepseek-v4.1-flash [gate tier 1 AND tier 2 at effort high, optional external;
+  ladder order 2026-10-12], qwen3.8-omni-flash [gate tier-2 fallback, optional
+  external] are the three houses — hy4/kimi are retired; two versions of one
+  family count as ONE
   type) — have each run an additional context-loaded pass at the SAME sha
   and NONE surfaced new material, the file is LOCKED for that mode at that
   sha: no further scans of that mode until the file's bytes change — not a
@@ -105,6 +106,14 @@ Assemble BEFORE reading the file body, and summarize it in the review header:
   GPL/commercial hard rules, twin-build byte-parity G23, EEVEE-only, mount-truncation G8).
 - **Recent history:** last AGENT_STATE / session-log entries and recent commits touching
   the file — what changed lately is where bugs live.
+- **Applicable RSI rules (enjoined 2026-10-18):** query the machine-curated prevention
+  ruleset for this file's language and load it into the pack:
+  `python C:\Users\User\source\repos\Nexusmill\tools\rsi\cli.py rules --lang <py|ts|...> --file <repo-relative path>`
+  (returns ACTIVE rules only — budget-capped, externally cleared; an empty list is a valid
+  answer and costs one line). Audit the file AGAINST each returned rule: violating an active
+  rule is a defect-level finding and SHOULD cite the rule id (`RSI-nnnn`) in its title so
+  recurrence is trackable. Rules sit BELOW the G-canon; on any conflict the canon wins.
+  Rules never gate the review — they sharpen it.
 - Cap the pack at what fits comfortably; prefer call-site EVIDENCE over more breadth.
 - **Producing-caller evidence (owner order 2026-10-10, local-gate experiment #10):** for every
   candidate finding, the pack carries WHO CAN PRODUCE the trigger — `find_references` on the
@@ -114,6 +123,21 @@ Assemble BEFORE reading the file body, and summarize it in the review header:
 
 ## Phase 2 — The review pass (per mode; run `bug` unless told otherwise)
 Read the file end to end with line numbers. Then produce the mode's exact contract:
+
+**Prompt posture from the store (owner order 2026-10-13):** before the pass,
+resolve the standing posture from the prompt store:
+`python C:\Users\User\source\repos\Tools\prompt-layer\prompt_layer.py get colibri/local-reviewer --source colibri-skill`
+(line 1 = meta JSON, the remaining lines = the posture text; exit 1 = unresolved).
+Fail-open: unresolved, THIS document is the posture; resolved, its
+`name@version(origin)` is stamped on the artifact header (Phase 4) and the fetch
+lands in the layer's usage ledger. The per-mode EXTERNAL-pass prompts
+(`colibri/bug`, `colibri/feature` = the SUGGEST pass - a "feature run" ALWAYS
+means suggested add-ons, owner standing order 2026-10-13 - `colibri/expectation-audit`
+= the two-phase conformance audit of a landed change, `colibri/spec`,
+`colibri/quality`, `colibri/plan`, `colibri/security`, `colibri/billing`) are
+consumed by the external CLIs (hy4-review and grok-review resolve `colibri/<mode>`
+fail-open to their builtins) - the local run keeps this document's Phase-2 mode
+contracts as its own posture.
 
 **bug** — persona: rigorous senior staff engineer + appsec reviewer. Hunt REAL defects
 only, no style padding: logic/correctness, off-by-one, None/undefined, unhandled error
@@ -217,7 +241,9 @@ Same laws + the debug ladder, in order, no skipping:
 ## Phase 4 — Persist & close (every review/debug, no exceptions)
 - Write the review to `.colibri_reviews/<rel path with separators as __>__<mode>__
   <sha8>.md` with a header: source path · model (in-session id) · sha256 · date ·
-  mode · one-line context-pack summary (what was consulted).
+  mode · one-line context-pack summary (what was consulted) · prompt
+  name@version(origin) when the store posture resolved (fail-open: omit when it
+  did not).
 - Update `.colibri_reviews/_manifest.json` in the EXACT canonical row shape — both consumers
   (colibri store.py and repo-memory's indexer) iterate `entry["modes"]` and anything else is
   SILENTLY INVISIBLE: `"<ABSOLUTE file path>": {"rel": "<repo-relative path>", "modes":
@@ -254,12 +280,13 @@ External passes are OPTIONAL second opinions, never automatic and never
 required to close a run (the standing M2/M3 ladder of 2026-09-19 is retired by
 this order). When the owner asks for one — or a run's findings make one worth
 PROPOSING (say so and disclose the batch cost, G19, before the first call) —
-the pass runs on the GATE'S pinned ladder, exactly as etched in G37: tier 1
-`deepseek/deepseek-v4.1-flash@baidu/fp8` →
-`deepseek/deepseek-v4.1-flash@deepinfra/fp8` for full-file bug hunts; tier 2
-`tencent/hy4-preview@tencent/fp8` → `tencent/hy4-preview@novita/fp8` →
-`moonshotai/kimi-k2.7-code` when a HIGH/CRITICAL deserves a stronger second
-look — prior review(s) loaded as context, hunting NEW findings only; a pass
+the pass runs on the GATE'S pinned ladder, exactly as etched in G37 (LADDER
+ORDER 2026-10-12): tier 1 `deepseek/deepseek-v4.1-flash@baidu/fp8` →
+`deepseek/deepseek-v4.1-flash@deepinfra/fp8` at default effort; tier 2 the SAME
+flash base AT REASONING EFFORT HIGH → `qwen/qwen3.8-omni-flash` fallback when a
+HIGH/CRITICAL deserves a stronger second look — prior review(s) loaded as
+context, hunting NEW findings only; hy4-preview and kimi-k2.7-code are RETIRED
+from the ladder (owner cost ruling 2026-10-12); a pass
 that surfaces nothing records `new: 0` honestly.
 
 Deliberate NON-unification is the point of this order: the LOCAL agent reviews
@@ -285,7 +312,7 @@ substitute DOWN THE CHAIN exactly like the gate's fallback semantics — never
 the same rung twice on one file, never an off-ladder model (grok-review stays
 off-ladder: second opinion only, its passes never count toward the three-model
 lock). The three-model lock keeps its meaning — in-session GLM, deepseek-flash,
-hy4-preview/kimi are distinct families — but it completes only when optional
+qwen3.8-omni-flash are distinct families — but it completes only when optional
 external passes actually run; without them the file simply stays unlocked.
 The external model is never the gate's substitute either: the GATE stays
 always-external, the skill stays local-first — that separation is the policy.

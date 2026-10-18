@@ -106,6 +106,14 @@ Assemble BEFORE reading the file body, and summarize it in the review header:
   GPL/commercial hard rules, twin-build byte-parity G23, EEVEE-only, mount-truncation G8).
 - **Recent history:** last AGENT_STATE / session-log entries and recent commits touching
   the file — what changed lately is where bugs live.
+- **Applicable RSI rules (enjoined 2026-10-18):** query the machine-curated prevention
+  ruleset for this file's language and load it into the pack:
+  `python C:\Users\User\source\repos\Nexusmill\tools\rsi\cli.py rules --lang <py|ts|...> --file <repo-relative path>`
+  (returns ACTIVE rules only — budget-capped, externally cleared; an empty list is a valid
+  answer and costs one line). Audit the file AGAINST each returned rule: violating an active
+  rule is a defect-level finding and SHOULD cite the rule id (`RSI-nnnn`) in its title so
+  recurrence is trackable. Rules sit BELOW the G-canon; on any conflict the canon wins.
+  Rules never gate the review — they sharpen it.
 - Cap the pack at what fits comfortably; prefer call-site EVIDENCE over more breadth.
 - **Producing-caller evidence (owner order 2026-10-10, local-gate experiment #10):** for every
   candidate finding, the pack carries WHO CAN PRODUCE the trigger — `find_references` on the
