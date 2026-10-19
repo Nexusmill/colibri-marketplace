@@ -1,6 +1,7 @@
 .DS_Store
 Thumbs.db
 .colibri_reviews/
+junk/
 __pycache__/
 *.pyc
 .adversary/

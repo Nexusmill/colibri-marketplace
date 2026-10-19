@@ -62,9 +62,25 @@ def main():
           all(_g._is_code(p) for p in ("tools/git-guard.mjs", "lib/x.cjs", "src/a.mts", "src/b.cts")),
           "missing: %s" % [p for p in ("tools/git-guard.mjs", "lib/x.cjs", "src/a.mts", "src/b.cts")
                            if not _g._is_code(p)])
-    check("code_exts_docs_still_not_code", not _g._is_code("README.md") and not _g._is_code("notes.txt"))
+    # OWNER RULING 2026-10-02 (reverses the 2026-09-30 notes.txt pin, EV-179's blind spot):
+    # an agent-modified .txt is MUTATED content and MUST be reviewed - .txt is code now.
+    check("code_exts_docs_still_not_code", not _g._is_code("README.md"))
+    check("code_exts_txt_is_code_ruling_2026_10_02", _g._is_code("notes.txt")
+          and _g._is_code("laser/chest_engraving_map.txt"),
+          "the EV-179 blind spot: .txt maps must reach the reviewer")
+    # gate r1 parity + docscan-union catches (owner ruling 2026-10-02):
+    import importlib as _il2
+    _aud = _il2.import_module("adversary_audit")
+    check("txt_audit_parity_ruling", ".txt" in _aud.CODE_EXTS,
+          "the auditor's copied CODE_EXTS must not silently drift from the gate's")
+    check("txt_docscan_union_ruling", ".txt" in _g.DOCSCAN_EXTS
+          and any(f.endswith(".txt") for f in ["x.txt"] if ".txt" in _g.DOCSCAN_EXTS),
+          ".txt is BOTH reviewed code AND locally docscanned (union, not either/or)")
 
-    # Snapshot must defer blob reads until the bounded payload composer consumes them.
+    # Snapshot fetches each staged blob EXACTLY ONCE (owner order 2026-10-08: the
+    # local pre-gate and tier eligibility must see the bytes before any paid call,
+    # superseding the pre-2026-10-08 lazy-generator contract; the no-redundant-reads
+    # guarantee is preserved - one fetch per file, reused by composer and pre-gate).
     import ast as _ast_lazy
     _tree_lazy = _ast_lazy.parse(open(GATE, encoding="utf-8").read())
     _fn_lazy = next(n for n in _tree_lazy.body if isinstance(n, _ast_lazy.FunctionDef)
@@ -74,11 +90,12 @@ def main():
         pass
     def _read_lazy(args, binary=False):
         _reads_lazy.append(args[-1])
-        return b"x"
+        return b"v = 1\n"
     def _compose_lazy(diff, blobs, context):
-        if _reads_lazy:
-            raise AssertionError("all staged blobs were loaded before composing")
-        if list(blobs) != [("a.py", b"x"), ("b.py", b"x")]:
+        if sorted(_reads_lazy) != [":a.py", ":b.py"]:
+            raise AssertionError("expected exactly one fetch per staged file before "
+                                 "composing, got %r" % sorted(_reads_lazy))
+        if list(blobs) != [("a.py", b"v = 1\n"), ("b.py", b"v = 1\n")]:
             raise AssertionError("staged blob contents or order changed")
         raise _StopLazy()
     _ns_lazy = dict(_g.__dict__)
@@ -133,7 +150,7 @@ def main():
             _fh.write('VALUE = "' + "a" * 260_000 + '"\n# BINARY_DIFF_MARKER\n')
         git(_td, "add", ".gitattributes", "large.py")
         _payloads_diff = []
-        def _review_diff(model, payload):
+        def _review_diff(model, payload, timeout=1200):
             _payloads_diff.append(payload)
             return "VERDICT: BLOCK", {}, "fixture", "fixture"
         _cwd_diff = os.getcwd()
@@ -239,13 +256,16 @@ def main():
         _ok_pl, _pl = False, repr(_e)                         # helper is a FAIL, not a crash
     check("review_payload_stable_first_diff_last", _ok_pl, str(_pl)[:200])
 
-    # size caps keep their legacy semantics: an oversized blob is omitted by
-    # note, in-budget files still ride in full, the diff always lands, and an
-    # empty context emits no rebuttal section
+    # size caps keep their legacy running-total semantics, with the 2026-10-08 G-B
+    # upgrade: an oversize file rides as a bounded SCOPED WINDOW (never a bare
+    # omission when the budget allows), in-budget files ride in full, the diff
+    # always lands, and an empty context emits no rebuttal section
     try:
         _big = b"X" * (_g.MAX_FILE_BYTES + 1)
         _pl2 = _g._compose_review_payload("D2", [("huge.py", _big), ("ok.py", b"fine")], "")
-        _ok2 = ("OMITTED FOR SIZE" in _pl2 and "XXXX" not in _pl2
+        _ok2 = ("SCOPED WINDOW for STAGED FILE huge.py" in _pl2
+                and "FULL STAGED FILE huge.py" not in _pl2
+                and "X" * 41_000 not in _pl2
                 and "FULL STAGED FILE ok.py" in _pl2 and "D2" in _pl2
                 and "REBUTTAL" not in _pl2)
     except Exception as _e:                                   # noqa: BLE001
@@ -282,18 +302,27 @@ def main():
     else:
         _e_detail = ""
     check("completion_parser_returns_provider", _ok, _e_detail)
-    # Owner 2026-09-26: new primary/secondary; retain measured fallback pins.
+    # Owner 2026-10-08 (tiered restructure + escalation pick): tier 1 =
+    # v4.1-flash pinned baidu/fp8 PRIMARY + deepinfra/fp8 FAILOVER (endpoints-API:
+    # $0.0354/$0.1416/$0.0007 and $0.14/$0.42/$0.0042; glm-5.3-flash retired on
+    # price). Tier 2 ESCALATION = tencent/hy4-preview pinned tencent/fp8 (first
+    # party, cheapest: $0.7506/$2.2509/$0.0378) + novita/fp8 backup (100% 1-day
+    # uptime); kimi LAST.
     try:
         _chain = [m.strip() for m in _g.DEFAULT_CHAIN.split(",")]
-        _ok3 = (_chain == ["openai/gpt-6-luna-pro",
-                           "qwen/qwen3.8-flash",
-                           "deepseek/deepseek-v4-pro-0813@deepinfra/fp8+wafer+ionstream",
-                           "z-ai/glm-5.3-flash@parasail/fp8+coreweave/nvfp4+modal/fp8",
-                           "deepseek/deepseek-v4-flash@open-inference/fp8+deepinfra/fp8"]
+        _ok3 = (_chain == ["deepseek/deepseek-v4.1-flash@baidu/fp8",
+                           "deepseek/deepseek-v4.1-flash@deepinfra/fp8",
+                           "tencent/hy4-preview@tencent/fp8",
+                           "tencent/hy4-preview@novita/fp8",
+                           "moonshotai/kimi-k2.7-code"]
                 and "grok" not in _g.DEFAULT_CHAIN
+                and "glm" not in _g.DEFAULT_CHAIN
                 and _g._split_entry(_chain[0]) == (
-                    "openai/gpt-6-luna-pro",
-                    [])
+                    "deepseek/deepseek-v4.1-flash",
+                    ["baidu/fp8"])
+                and _g._split_entry(_chain[2]) == (
+                    "tencent/hy4-preview",
+                    ["tencent/fp8"])
                 and _g._split_entry("z-ai/glm-5.3-flashx@z-ai/fp8") == (
                     "z-ai/glm-5.3-flashx", ["z-ai/fp8"]))
     except Exception as _e:  # noqa: BLE001 - a missing constant/helper is a FAIL, not a crashed selftest
@@ -749,7 +778,7 @@ def main():
     # P7. GATE CATCH (gate_20260907-171348, MEDIUM): a content line '++ x' arrives in the diff
     # as '+++ x' - it is content inside a hunk, not a header; a literal AFTER it must still be
     # seen and the path must not be corrupted.
-    rc7 = cleared_commit("plus.py", "++ x\n+++ b/phantom.py\ntoken_line = '%s'\n" % aws_p,
+    rc7 = cleared_commit("plus.py", "++ 'x'\n+++ b/phantom.py\ntoken_line = '%s'\n" % aws_p,
                          "plus-plus content then a literal")
     head = git(tmp, "rev-parse", "HEAD").stdout.strip()
     r = push_stdin("refs/heads/main %s refs/heads/main %s\n" % (head, docs_head))
@@ -1767,10 +1796,14 @@ def main():
     check("adjudication_artifact_and_sidecar_atomic_pair",
           os.path.basename(a1) != os.path.basename(a2)
           and os.path.isfile(a1) and os.path.isfile(a2)
+          # 2026-10-08 T2.3: rows gained additive tier/tier_reason telemetry (None
+          # when the caller did not run the tiered flow) - additive, never a reshape
           and sc.get(os.path.basename(a1)) == {"staged": {"app.py": "shaZ"},
-                                               "rebuttal": True}
+                                               "rebuttal": True,
+                                               "tier": None, "tier_reason": None}
           and sc.get(os.path.basename(a2)) == {"staged": {"app.py": "shaZ"},
-                                               "rebuttal": False},
+                                               "rebuttal": False,
+                                               "tier": None, "tier_reason": None},
           "a1=%s a2=%s sidecar=%s" % (os.path.basename(a1), os.path.basename(a2), sc))
 
     _adj_fixture("gate_20260921-100000.md", None,
@@ -2097,33 +2130,42 @@ def main():
             check("route_fixed_default_" + str(len(_payload)) + "_" + str(bool(_context)),
                   _fixed == (_RC, "off"), str(_fixed)[:200])
         # Preserve coverage of the explicitly enabled legacy router.
+        # 2026-10-01: PROMOTE_TARGET (ds-pro-0813) IS the new default primary,
+        # so promotion on the default is a no-op; the router's real logic is
+        # exercised on a synthetic chain with deepseek at rung 3 (the same
+        # patching pattern as route_absent_target_unchanged below).
         os.environ["ADVERSARY_PROMOTE_OFF"] = "0"
+        _Rsyn = ("openai/gpt-6-luna-pro,qwen/qwen3.8-flash,"
+                 "deepseek/deepseek-v4-pro-0813@deepinfra/fp8,"
+                 "z-ai/glm-5.3-flash,deepseek/deepseek-v4-flash")
+        _prev_dc_route = _g.DEFAULT_CHAIN
+        _g.DEFAULT_CHAIN = _Rsyn
         try:
-            _ro = _g._route_chain(_RC, "x" * (_g.PROMOTE_MIN_CHARS + 1), "")
+            _ro = _g._route_chain(_Rsyn, "x" * (_g.PROMOTE_MIN_CHARS + 1), "")
             _ok_ro = (_ro[1] == "rule"
                       and _ro[0].split(",")[0].startswith("deepseek/deepseek-v4-pro-0813@")
-                      and len(_ro[0].split(",")) == len(_RC.split(",")))
+                      and len(_ro[0].split(",")) == len(_Rsyn.split(",")))
         except Exception as _e:                                 # noqa: BLE001
             _ok_ro, _ro = False, repr(_e)
         check("route_promotes_deepseek_on_large_payload", _ok_ro, str(_ro)[:200])
 
         try:
-            _rb = _g._route_chain(_RC, "small", "REBUT: the finding misread the bytes")
+            _rb = _g._route_chain(_Rsyn, "small", "REBUT: the finding misread the bytes")
             _ok_rb = (_rb[1] == "rule" and _rb[0].split(",")[0].startswith("deepseek/"))
         except Exception as _e:                                 # noqa: BLE001
             _ok_rb, _rb = False, repr(_e)
         check("route_promotes_deepseek_on_rebuttal_round", _ok_rb, str(_rb)[:200])
 
         try:
-            _rd = _g._route_chain(_RC, "small", "")
-            _ok_rd = (_rd == (_RC, "default"))
+            _rd = _g._route_chain(_Rsyn, "small", "")
+            _ok_rd = (_rd == (_Rsyn, "default"))
         except Exception as _e:                                 # noqa: BLE001
             _ok_rd, _rd = False, repr(_e)
         check("route_default_below_threshold_first_round", _ok_rd, str(_rd)[:200])
 
         try:
-            _lst0 = _RC.split(",")
-            _rp = _g._route_chain(_RC, "x" * (_g.PROMOTE_MIN_CHARS + 1), "")
+            _lst0 = _Rsyn.split(",")
+            _rp = _g._route_chain(_Rsyn, "x" * (_g.PROMOTE_MIN_CHARS + 1), "")
             _lst1 = _rp[0].split(",")
             _ok_rp = (sorted(_lst0) == sorted(_lst1) and _lst1[0] == _lst0[2]
                       and _g._route_chain(_rp[0], "y" * (_g.PROMOTE_MIN_CHARS + 2), "")[0]
@@ -2131,6 +2173,7 @@ def main():
         except Exception as _e:                                 # noqa: BLE001
             _ok_rp, _rp = False, repr(_e)
         check("route_preserves_order_no_dupes_idempotent", _ok_rp, str(_rp)[:200])
+        _g.DEFAULT_CHAIN = _prev_dc_route     # restore before the _RC-based rows
 
         _rm = _g._route_chain("z-ai/glm-5.3-flash@parasail/fp8", "x" * 900000, "R")
         check("route_manual_model_override_bypasses",
@@ -2206,17 +2249,36 @@ def main():
                                             '"choice": "deepseek_first", '
                                             '"probabilities": {"deepseek_first": 0.9}, '
                                             '"confidence": 0.9}}')
-        _jg = _g._route_chain(_RC, "small", "")
-        _ok_jg = (_jg[1] == "jev" and _jg[0].split(",")[0].startswith("deepseek/"))
+        # 2026-10-01: the router's Jev branch is exercised on the synthetic
+        # chain (deepseek at rung 3) - on the new default the target IS the
+        # primary, so promotion is a no-op there (route rows above).
+        _prev_dc_jev = _g.DEFAULT_CHAIN
+        _g.DEFAULT_CHAIN = _Rsyn
+        try:
+            _jg = _g._route_chain(_Rsyn, "small", "")
+            _ok_jg = (_jg[1] == "jev" and _jg[0].split(",")[0].startswith("deepseek/"))
+        except Exception as _e:                                 # noqa: BLE001
+            _ok_jg, _jg = False, repr(_e)
+        finally:
+            _g.DEFAULT_CHAIN = _prev_dc_jev
         check("jev_promotes_only_in_gray_zone", _ok_jg, str(_jg)[:200])
         os.environ["ADVERSARY_JEV_FAKE"] = ('{"promote_deepseek": {"type": "choice", '
                                             '"choice": "default_order", '
                                             '"probabilities": {"default_order": 0.99}, '
                                             '"confidence": 0.99}}')
-        _jn = _g._route_chain(_RC, "x" * (_g.PROMOTE_MIN_CHARS + 1), "")
+        # 2026-10-01: Jev's default_order must never undo the deterministic
+        # rule's promotion - exercised on the synthetic chain (deepseek rung 3);
+        # on the new default the target IS the primary and routing is a no-op.
+        _g.DEFAULT_CHAIN = _Rsyn
+        try:
+            _jn = _g._route_chain(_Rsyn, "x" * (_g.PROMOTE_MIN_CHARS + 1), "")
+            _ok_jn = (_jn[1] == "rule" and _jn[0].split(",")[0].startswith("deepseek/"))
+        except Exception as _e:                                 # noqa: BLE001
+            _ok_jn, _jn = False, repr(_e)
+        finally:
+            _g.DEFAULT_CHAIN = _prev_dc_jev
         check("jev_never_demotes_deterministic_rule",
-              _jn[1] == "rule" and _jn[0].split(",")[0].startswith("deepseek/"),
-              str(_jn)[:200])
+              _ok_jn, str(_jn)[:200])
         os.environ["ADVERSARY_JEV_OFF"] = "1"
         _jo = _g._route_chain(_RC, "small", "")
         check("jev_killswitch_skips_consult", _jo == (_RC, "default"), str(_jo)[:200])
@@ -2233,23 +2295,27 @@ def main():
             else:
                 os.environ[_k] = _v
 
-    # e2e: a large staged payload routes the chain deepseek-first AND still
-    # clears through the fake reviewer; a small one leaves the default order
-    # (no routing line at all)
+    # e2e: with ds-pro-0813 now the DEFAULT primary (2026-10-01), a large
+    # payload is a routing NO-OP (the promote target already leads) - the run
+    # clears with no routing line; a small one behaves identically. The
+    # router's promote behavior is covered in-process on the synthetic chain.
     tmpR = tempfile.mkdtemp(prefix="advgate_")
     subprocess.run([GIT, "init", "-q", tmpR], capture_output=True)
     git(tmpR, "config", "user.email", "t@t")
     git(tmpR, "config", "user.name", "t")
     with open(os.path.join(tmpR, "big.py"), "w", encoding="utf-8") as fh:
-        fh.write("X = \"" + "a" * 300 + "\"\n" * 40)
+        # valid 40-assignment module (~12KB): 2026-10-08 G-A made the pre-gate the
+        # first layer that actually PARSES staged bytes - the old fixture
+        # ("X = \"" + "a"*300 + "\"\n" * 40) was itself a syntax error (lone-quote
+        # lines) that only ever reached a stubbed model.
+        fh.write("".join("X%d = \"%s\"\n" % (k, "a" * 300) for k in range(40)))
     git(tmpR, "add", "big.py")
     _e1 = gate(tmpR, "run", env_extra={"ADVERSARY_FAKE": "CLEAR",
                                        "ADVERSARY_PROMOTE_OFF": "0",
                                        "ADVERSARY_PROMOTE_MIN_CHARS": "100",
                                        "ADVERSARY_JEV_OFF": "1"})
-    check("route_e2e_large_run_emits_routing_line",
-          _e1.returncode == 0 and "workload routing" in _e1.stdout
-          and "deepseek/deepseek-v4-pro-0813" in _e1.stdout,
+    check("route_e2e_large_run_noop_target_is_primary",
+          _e1.returncode == 0 and "workload routing" not in _e1.stdout,
           "rc=%s out=%s err=%s" % (_e1.returncode, _e1.stdout[:200], _e1.stderr[-200:]))
     _e2 = gate(tmpR, "run", env_extra={"ADVERSARY_FAKE": "CLEAR",
                                        "ADVERSARY_PROMOTE_OFF": "0",

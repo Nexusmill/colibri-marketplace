@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "colibri_marketplace-memory": {
+      "type": "stdio",
+      "command": "C:/Users/User/source/repos/repo-memory/.venv/Scripts/python.exe",
+      "args": [
+        "-B",
+        "-m",
+        "repo_memory.server"
+      ],
+      "env": {
+        "REPO_MEMORY_NAME": "colibri-marketplace",
+        "REPO_MEMORY_DB": "E:/repo-memory/colibri_marketplace",
+        "PYTHONPATH": "C:/Users/User/source/repos/repo-memory",
+        "REPO_MEMORY_REPO_ROOT": "C:/Users/User/source/repos/colibri-marketplace"
+      }
+    }
+  }
+}

@@ -9,7 +9,10 @@ Blocked:
   Bash:  any `git ... --no-verify`; `git commit` with a -n short-flag cluster;
          hooksPath references (except setting core.hooksPath to .githooks, the arming
          value); `commit-tree`; `update-ref`; mutating `git notes` subcommands
-         (add/append/copy/edit/remove/prune/merge); any command mentioning `.adversary`
+         (add/append/copy/edit/remove/prune/merge); history-rewriting commands
+         (rebase, git history reword/split/drop, filter-branch/filter-repo) -
+         re-notarization awareness (owner order 2026-10-10): rewrites orphan the
+         SHA-keyed notarization chain; any command mentioning `.adversary`
          that is not an invocation of the gate tooling; ADVERSARY_FAKE outside the
          selftests.
          ANY Bash reference to `.adversary/` - no read exemption (EV-022's five gate rounds
@@ -81,9 +84,11 @@ BASH_RULES = [
     # local single-key writes stay allowed (the hooks-path rules above govern the key).
     (r"\bgit\b[^\n;&|]*\bconfig\b[^\n;&|]*(?:--global\b|--system\b|--worktree\b|--remove-section\b"
      r"|--rename-section\b|--edit\b|\s-e\b|--file\b|\s-f\s|\binclude\.path\b|\bincludeif\b)",
-     "G39: git config writes that can re-point or drop the hooks path without naming it "
-     "(--global/--system/--worktree, --remove-section/--rename-section, --edit, --file, "
-     "include.path/includeIf) are the owner's alone. Per-repo arming is install_gate.py."),
+     "G39: git config writes that can re-point or drop the hooks path or the config-hook "
+     "arming (--global/--system/--worktree, --remove-section/--rename-section/--edit/--file "
+     "- at ANY scope, include.path/includeIf) are the owner's alone; global reads ride the "
+     "same denial (conservative by design). Per-repo arming is install_gate.py / "
+     "config_hooks.py; hook.adversary-* reads are allowed under their own rule."),
     (r"\bGIT_CONFIG_(?:GLOBAL|SYSTEM|NOSYSTEM|PARAMETERS|COUNT|KEY_\d+|VALUE_\d+)\b",
      "G39: config-override environment variables (GIT_CONFIG_GLOBAL/SYSTEM/NOSYSTEM/PARAMETERS/"
      "COUNT/KEY_n) re-point the machine-wide arming for that command. Not permitted from the "
@@ -149,6 +154,27 @@ BASH_RULES = [
     (r"\bupdate-ref\b",
      "G39: update-ref can move refs/write forged notes without any gate. Not permitted "
      "from the harness."),
+    (r"\bgit\s+(?:history|rebase)\b",
+     "G39 (owner order 2026-10-10, re-notarization awareness): history-rewriting git "
+     "commands (rebase, git history reword/split/drop) orphan the adversary notarization "
+     "chain - notes are SHA-keyed and HMAC-chained, so every rewritten commit lands "
+     "UNNOTARIZED. The owner performs history rewrites; rewritten commits must be "
+     "re-notarized (adversary_gate.py record) before push - the push guard refuses "
+     "unnotarized history otherwise."),
+    (r"\b(?:git-filter-repo|filter-repo|filter-branch)\b",
+     "G39 (owner order 2026-10-10, re-notarization awareness): bulk history rewrites "
+     "orphan the SHA-keyed adversary notarization chain for every rewritten commit. "
+     "Owner-only; re-notarize via adversary_gate.py record before push or the push "
+     "guard refuses."),
+    (r"\bgit\b[^\n;&|]*\bconfig\b(?=[^\n;&|]*\bhook\.adversary-)"
+     r"(?:[^\n;&|]*(?:--add\b|--unset\b|--replace-all\b|--remove-section\b"
+     r"|--rename-section\b|--edit\b|--file\b|\s-f\s)"
+     r"|[^\n;&|]*\bhook\.adversary-[\w.-]*\s*="
+     r"|[^\n;&|]*\bhook\.adversary-[\w.-]+\s+\S)",
+     "G39 (owner order 2026-10-11, config-hooks arming): the hook.adversary-* config "
+     "entries ARE the machine's gate arming - mutating them re-arms or disarms the "
+     "paid review gate. Owner-set via the migration tooling; reads are fine, writes "
+     "(flag form, key=value form, or key-value form - any scope, any order) are not."),
     (r"\bgit\b[^\n|;&]*\bnotes\b[^\n|;&]*\b(add|append|copy|edit|remove|prune|merge)\b",
      "G39: adversary notes are written ONLY by adversary_gate.py record. Forging or "
      "deleting notes defeats the audit tripwire."),
@@ -171,7 +197,13 @@ BASH_RULES = [
     # `ls/cat .adversary/`. A direct literal reference is therefore always the agent poking
     # the state dir - refused. Residual (accepted, audit-tripwire-backstopped): glob or
     # string-concat evasion that never spells the literal `.adversary`.
-    (r"\.adversary\b",
+    # Path boundary required after the name (owner order 2026-10-11): the
+    # config-hooks arming keys `hook.adversary-<event>` are NOT state-dir
+    # references - a hyphen continuation is the ONE allowed spelling;
+    # everything else (glob `*`, redirect `>`, separators, end) still denies
+    # (round gate_20261011-063610 MEDIUM: an over-broad allowlist opened
+    # trivial evasion).
+    (r"\.adversary(?!-)",
      "G39: referencing .adversary/ (clearances, override, notes staging) directly from the "
      "shell is not permitted - once function shadowing / PATH / aliases are in play a text "
      "guard cannot tell a read from a write, so the whole state dir is off-limits to Bash. "

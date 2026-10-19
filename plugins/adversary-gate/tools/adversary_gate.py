@@ -57,6 +57,10 @@ if not os.path.isfile(GIT):
     GIT = "git"                       # relocated/foreign machine: rely on PATH
 CODE_EXTS = {".py", ".js", ".json", ".ts", ".jsx", ".tsx", ".html", ".css", ".ps1", ".sh", ".bat",
              ".c", ".cpp", ".h", ".rs", ".go", ".java", ".glsl", ".osl",
+             # OWNER RULING 2026-10-02 (reverses the 2026-09-30 "notes.txt not code" pin;
+             # closes the EV-179 blind spot where reviewers fabricated about .txt maps they
+             # could not see): an agent-modified .txt is mutated content -> it is reviewed.
+             ".txt",
              # EV-029 (2026-09-04): Caliper's git-guard.mjs - a security guard - passed a gate run
              # UNREVIEWED because the ES-module / CommonJS / TS-module forms were missing here.
              ".mjs", ".cjs", ".mts", ".cts"}
@@ -78,6 +82,79 @@ NOTES_REF = "refs/notes/adversary"
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 XAI_API_URL = "https://api.x.ai/v1/responses"   # xAI-native backup (grok); different API shape
+LOCAL_API_URL_DEFAULT = "http://127.0.0.1:11434/v1/chat/completions"   # Ollama OpenAI-compat; the `local:` rung (owner order 2026-09-30). Override per call with ADVERSARY_LOCAL_URL.
+# Prompt-side remedy for the MEASURED verdict-first quirk (replay 2026-09-30: 6/6 completed
+# local rounds led with the verdict line and scored malformed). This is INPUT shaping -
+# exactly what --context already does - never response munging: the single-final-verdict
+# invariant stays untouched and still refuses duplicate/leading markers.
+LOCAL_FORMAT_SUFFIX = ("\n\nOUTPUT CONTRACT (reminder): your reply must END with exactly one "
+                       "final line 'VERDICT: CLEAR' or 'VERDICT: BLOCK' - no other line may "
+                       "start with 'VERDICT:'.")
+
+
+def _local_vram_free_mib():
+    """Free VRAM in MiB, or None when it cannot be measured (no nvidia-smi / timeout).
+    The FIRST nvidia-smi line is CUDA device 0 - the device Ollama loads on by default
+    (CUDA_VISIBLE_DEVICES unset); on this single-CUDA-GPU host that is the 5080."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15).stdout.strip()
+        return int(out.splitlines()[0].strip())
+    except Exception:
+        return None
+
+
+def _local_model_loaded(model):
+    """True when the local endpoint already has THIS model resident (steady state: no new
+    load will occur, so the VRAM floor does not apply - free VRAM is low BECAUSE the model
+    is loaded, which is the intended bounded state). Best-effort via /api/ps."""
+    base = (os.environ.get("ADVERSARY_LOCAL_URL") or LOCAL_API_URL_DEFAULT)
+    base = base.rsplit("/v1/chat/completions", 1)[0]
+    try:
+        with urllib.request.urlopen(base + "/api/ps", timeout=8) as r:
+            d = json.loads(r.read())
+        # EXACT match only, deliberately conservative: a tag-less request ("mistral")
+        # resolving to a different resident tag ("mistral:7b") must NOT bypass the floor -
+        # serving it may still require a NEW load (the CPU-offload case the owner forbade).
+        # A missed residency match costs one conservative skip to the external rungs; a
+        # wrong bypass can spill to CPU and freeze the desktop. Asymmetric - by design.
+        return any((m.get("name") or "") == model for m in d.get("models", []))
+    except Exception:
+        return False
+
+
+def _local_vram_guard(model):
+    """Owner order 2026-09-30 (restart-and-bound session): the local rung must NEVER spill
+    to CPU - Ollama decides GPU-vs-CPU placement at LOAD time from free VRAM, so this runs
+    BEFORE any request. Below the floor the rung fails CLOSED with a loud skip (stderr +
+    SystemExit; the chain advances to the external rungs) instead of a multi-minute
+    offload grind that freezes the desktop. Floor is read per call
+    (ADVERSARY_LOCAL_MIN_FREE_MIB, MiB; 0 disables; a non-integer refuses the rung rather
+    than guessing). Default 13000 sizes the bounded serving model - Q3_K_M ~10.7GiB
+    weights + 8k-ctx KV ~0.65GiB (OLLAMA_NUM_PARALLEL=1) + buffers ~0.8GiB ~= 12.4GiB -
+    with ~0.6GiB load margin, leaving the desktop a ~3.9GiB total allowance on the
+    5080's 16GiB. Unmeasurable (no nvidia-smi) proceeds - transport rules still apply.
+    When the model is ALREADY resident (_local_model_loaded) the floor does not apply:
+    placement already happened (100% GPU) and holding the resident model IS the bounded
+    steady state - free VRAM is low because the model is loaded, by design."""
+    raw = os.environ.get("ADVERSARY_LOCAL_MIN_FREE_MIB", "13000") or "0"
+    try:
+        floor = int(raw)
+    except ValueError:
+        raise SystemExit("ADVERSARY GATE: ADVERSARY_LOCAL_MIN_FREE_MIB is not an integer "
+                         "(%r) - local rung skipped rather than guess" % raw)
+    if floor == 0 or _local_model_loaded(model):
+        return
+    free = _local_vram_free_mib()
+    if free is not None and free < floor:
+        sys.stderr.write("ADVERSARY GATE: local rung SKIPPED - %d MiB VRAM free, floor is "
+                         "%d MiB (loading now would spill to CPU; falling through to the "
+                         "external rungs)\n" % (free, floor))
+        raise SystemExit("ADVERSARY GATE: local rung SKIPPED - %d MiB VRAM free, floor is "
+                         "%d MiB: loading now would spill to CPU (owner order: never "
+                         "offload, warn and fall through to the external rungs)"
+                         % (free, floor))
 # --model accepts a comma-separated FALLBACK CHAIN: models are tried in order and the
 # chain advances only on transport/provider failure (HTTP errors, exhausted 429s, an
 # error payload) or an EMPTY-content response (no verdict was rendered - seen live as
@@ -86,18 +163,99 @@ XAI_API_URL = "https://api.x.ai/v1/responses"   # xAI-native backup (grok); diff
 # empty, cmd_run fails closed to BLOCK exactly as before. Owner ruling 2026-09-01:
 # glm-5.3-flash primary (similarly priced and it FINISHES). Owner ruling 2026-09-03:
 # grok-4.6 (xAI-native - an `xai:` prefix routes a chain entry to api.x.ai, NOT OpenRouter)
-# Owner order 2026-09-26: Luna Pro primary, Qwen Flash secondary; MiMo removed.
-# Keep the remaining fallback order and measured provider pins. New models are
-# unpinned (no measured/owner-approved endpoint pins). fleet_selftest validates
-# parity with GATE_LADDER and the live catalog. Explicit overrides still win.
-DEFAULT_CHAIN = ("openai/gpt-6-luna-pro,"
-                 "qwen/qwen3.8-flash,"
-                 "deepseek/deepseek-v4-pro-0813@deepinfra/fp8+wafer+ionstream,"
-                 "z-ai/glm-5.3-flash@parasail/fp8+coreweave/nvfp4+modal/fp8,"
-                 "deepseek/deepseek-v4-flash@open-inference/fp8+deepinfra/fp8")
+# Owner order 2026-09-30 (side-chat, cost control after kimi failover rounds took 59% of
+# the day's spend): pinned glm rung 2, pinned deepseek rung 3, kimi LAST RESORT. Pins
+# re-ranked reliability-first (10/10 probe answers, then uptime, then fp8-certainty, then
+# throughput) from model-pins evidence 2026-09-16: glm = sail-research/fp8 + wafer +
+# together (the previous parasail/coreweave/modal pins measured 0/10 answers in that
+# probe); ds-flash = digitalocean + deepinfra/fp8 + phala (drops 97.8%-uptime
+# open-inference from the lead); ds-pro pins unchanged (owner-confirmed from the
+# 2026-09-23 cache-read measurements). kimi version price-checked live 2026-09-30:
+# k2.7-code ($0.671/$3.35) is the highest tier at its price - k3 is 4.5x, not same-price;
+# unpinned (new model, no measured pins). Probe data is 14 days old; fleet_probe can
+# refresh. A `local:` prefix routes an entry to the Ollama-compatible endpoint
+# (ADVERSARY_LOCAL_URL, default LOCAL_API_URL_DEFAULT) - same chat-completions shape, no
+# auth header, transport failure advances the chain. local-first in DEFAULT_CHAIN is
+# PENDING the replay catch-rate bar (owner gates it on data; until then `local:` is
+# reachable via ADVERSARY_MODEL/--model only). fleet_selftest validates parity with
+# GATE_LADDER and the live catalog. Explicit overrides still win.
+# Owner order 2026-10-01 (pricing re-evaluation): prices MUST come from the
+# OpenRouter per-provider page / endpoints API for the PINNED endpoint - never
+# third-party tables, never another provider's price for the same model (the
+# 2026-09-30 table priced ds-pro at deepinfra $1.30/$2.60 while baidu/fp8 is
+# $0.2376/$0.7128 with $0.00756/M cache). At that pricing ds-pro-0813 is the
+# strongest coder at qwen-adjacent cost (output CHEAPER, cache 9x cheaper,
+# 1.05M ctx covers MAX_TOTAL_BYTES) -> PRIMARY. Qwen removed from default
+# failover on 2026-10-04: SVG review 390d379059da443fa180bc9cd8dfe92d
+# fabricated geometry and returned conflicting/non-final verdicts after primary HTTP 402.
+# Explicit owner model selection remains available. Pins
+# verified against the live /models/{slug}/endpoints tags; kimi unpinned LAST.
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+# --- tiered reviewer structure (owner order 2026-10-08) ---
+# Tier 1 (quick rung): deepseek-v4.1-flash pinned primary+failover. Provider pins from
+# the live OpenRouter endpoints API 2026-10-08 (owner rule: prices never from
+# third-party tables): baidu/fp8 $0.0354 in / $0.1416 out / $0.0007 cache - the
+# cheapest completion AND cache of any fp8 host; deepinfra/fp8 $0.14/$0.42/cache
+# $0.0042 failover. Owner ruled glm-5.3-flash out (price rise) and ds-pro-0813 off
+# the every-commit rung.
+TIER1_CHAIN = ("deepseek/deepseek-v4.1-flash@baidu/fp8,"
+               "deepseek/deepseek-v4.1-flash@deepinfra/fp8")
+# Tier 2 (strong escalation rung): owner pick 2026-10-08 - tencent/hy4-preview, "a
+# true escalation model". Pins from the live endpoints API (owner rule: never
+# third-party tables): tencent/fp8 PRIMARY - first-party AND cheapest on all three
+# axes ($0.7506 in / $2.2509 out / $0.0378 cache; its UTC 0-1600 peak rate merely
+# TIES the field); novita/fp8 BACKUP - identical fp8 at field price with the best
+# uptime of the alternatives (100% 1-day vs deepinfra 95.87% / siliconflow 94.50%).
+# kimi stays the terminal operational failover.
+TIER2_CHAIN = ("tencent/hy4-preview@tencent/fp8,"
+               "tencent/hy4-preview@novita/fp8,"
+               "moonshotai/kimi-k2.7-code")
+DEFAULT_CHAIN = TIER1_CHAIN + "," + TIER2_CHAIN
 DEFAULT_MODEL = os.environ.get("ADVERSARY_MODEL", DEFAULT_CHAIN)
 MAX_FILE_BYTES = 250_000          # per staged file included in full
-MAX_TOTAL_BYTES = 900_000         # whole prompt budget (hy3 ctx 262k tokens)
+MAX_TOTAL_BYTES = 1_050_000       # complete runtime + tests + diff; pinned reviewers support this budget
+# G-C (owner order 2026-10-08): verdicts are bytes and findings are bounded prose -
+# cap completion tokens so no verbose rung can bill unbounded output.
+# R3 (owner order 2026-10-08, same day): the ceiling is a DERIVATIVE OF PAYLOAD
+# SIZE, not a flat number - a flat cap starves reasoning reviewers on large
+# (catalog-coupled) payloads: live evidence, every tier-2 rung returned
+# finish_reason=length with 100% reasoning tokens and zero content at flat
+# 2000/8000/16000. AMENDED same day (live data): the review TASK's reasoning
+# load floors around 20-30k tokens regardless of payload size - budgets of
+# 6.5k and 20.5k starved every rung on real payloads, and the only capped-era
+# successes were >= 21.9k - so the FLOOR is 32000 (an unused ceiling costs
+# nothing: max_tokens bounds, it does not bill) and the hard cap is 64000.
+MAX_OUTPUT_TOKENS = _env_int("ADVERSARY_MAX_TOKENS", 32000)
+MAX_OUTPUT_TOKENS_CAP = _env_int("ADVERSARY_MAX_TOKENS_CAP", 64000)
+OUTPUT_TOKENS_PER_INPUT_PCT = 15
+# G-D: per-tier review timeouts - a stalled "quick" rung must never wedge a commit
+# for the old uniform 20 minutes.
+TIER1_TIMEOUT_S = _env_int("ADVERSARY_TIER1_TIMEOUT", 180)
+TIER2_TIMEOUT_S = _env_int("ADVERSARY_TIER2_TIMEOUT", 600)
+# Tier-1 eligibility (mirrors the legacy promote boundary): small payloads without
+# rebuttals, removals, gated prefixes or oversize blobs ride the quick rung.
+TIER1_MAX_CHARS = _env_int("ADVERSARY_TIER1_MAX_CHARS", 40000)
+# Sampled batch audit of tier-1 CLEARs: a deterministic tree+day hash selects
+# AUDIT_PCT% for a post-hoc tier-2 BATCH re-review (50% off, zero commit latency).
+# BATCH POLICY (owner order 2026-10-08): the interactive commit path NEVER routes to
+# :batch - ONLY these post-hoc audits do, because nothing waits on their verdict.
+AUDIT_PCT = _env_int("ADVERSARY_AUDIT_PCT", 10)
+TIER2_AUDIT_MODEL = os.environ.get(
+    "ADVERSARY_AUDIT_MODEL",
+    # The LIVE batch ladder primary (autoland/fleet_config.py BATCH_LADDER, gate
+    # round gate_20261008-150151 HIGH): deepseek-v4-pro-0813:batch was DELISTED
+    # from the catalog 2026-09-22 - defaulting the audit to it dead-lettered every
+    # sampled audit as REJECTED. Re-pin alongside TIER2_CHAIN after the owner's
+    # benchmark pick; ADVERSARY_AUDIT_MODEL overrides.
+    "openai/gpt-6-luna-pro:batch")
+# selftest fake sequencing: "BLOCK,CLEAR" consumes one verdict per model call.
+_FAKE_CALLS = 0
 
 # ---- LOCAL secret pre-scan (layered-enforcement fix 2026-09-02) --------------------------
 # WHY: the gate reviews by sending the staged diff to a REMOTE model (OpenRouter), and it
@@ -423,7 +581,18 @@ PROMPT = (
     "claims before; assume nothing. IGNORE style, naming, formatting, and pre-existing "
     "issues the change does not touch or worsen. A REBUTTAL section, when present, is the "
     "author's response to a previous BLOCK - weigh it, verify it, and do not re-raise a "
-    "point it factually settles. Repo doctrine you must not re-litigate: a "
+    "point it factually settles. Review the actual operation: a pre-write proposal is not "
+    "yet a commit. For documents and fabrication assets, check their stated scope and "
+    "supplied evidence; do not invent external specifications or treat missing unrelated "
+    "files as defects. SVG cut-sheet coordinates describe independent nested parts, not "
+    "their assembled positions. Verify interval arithmetic before alleging overlap or "
+    "overflow. Report only findings that survive your own checks, with a concrete trigger "
+    "and impact; discard disproved hypotheses. Do not output internal deliberation or "
+    "intermediate verdicts. Use exactly one verdict, as the final line. "
+    "A finding set of LOW severities and nothing else may instead end with exactly "
+    "'VERDICT: WARN' (the commit lands with the findings recorded in its clearance); "
+    "any MEDIUM-or-higher finding must end with 'VERDICT: BLOCK'. "
+    "Repo doctrine you must not re-litigate: a "
     ".colibri_reviews/_manifest.json row is keyed by the ABSOLUTE source path with a rel "
     "field and a modes table BY DESIGN (colibri store.py writes it that way) - absolute keys, "
     "machine paths inside them and a full sha256 in sha are the canonical shape, not findings; "
@@ -451,7 +620,18 @@ def _run_git(args, binary=False):
     # diff/show read the substituted object graph, so the gate would hash the innocent
     # blob and clear a dirty commit (audit-probe finding). Ignore replace refs.
     env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
-    p = subprocess.run([GIT] + args, capture_output=True, env=env)
+    # A synchronous Git child inside MCP must not inherit the protocol pipe;
+    # on Windows that stalls rev-parse while the event loop is blocked here.
+    # timeout=60 (marketplace round gate_20261011-093046 MEDIUM): a slow git
+    # must fail CLOSED with the gate's message, never crash on a raw
+    # TimeoutExpired traceback.
+    try:
+        p = subprocess.run([GIT] + args, capture_output=True, env=env,
+                           stdin=subprocess.DEVNULL, timeout=60)
+    except subprocess.TimeoutExpired:
+        raise SystemExit("git %s timed out after 60s - failing closed; re-run the "
+                         "gate when the repository is responsive."
+                         % " ".join(args[:2]))
     if p.returncode != 0:
         raise SystemExit("git %s failed: %s" % (" ".join(args[:2]),
                                                 p.stderr.decode("utf-8", "replace")[:300]))
@@ -475,12 +655,20 @@ def _staged_sha(path):
     return hashlib.sha256(_run_git(["show", ":" + path], binary=True)).hexdigest()
 
 
-def _is_code(path, hook_names=True):
-    return (path.startswith(GATED_PREFIXES) or os.path.splitext(path)[1].lower() in CODE_EXTS
+def _is_code(path, hook_names=True, text_files=True):
+    ext = os.path.splitext(path)[1].lower()
+    return (path.startswith(GATED_PREFIXES) or (ext in CODE_EXTS and (ext != ".txt" or text_files))
             or (hook_names and os.path.basename(path) in HOOK_NAMES))
 
 
 _EPOCH_ANCHOR_CACHE = {}
+
+
+def _text_files_apply(rev):
+    # The certified runtime includes this sibling auditor; share its ancestry validation
+    # so notary/push history and standalone CI agree. Staging always uses current rules.
+    import adversary_audit
+    return adversary_audit._text_files_apply(_repo_root(), rev)
 
 
 def _hook_names_apply(rev):
@@ -607,15 +795,23 @@ def _diff_paths(pre_args, paths):
     return "".join(out)
 
 
+DOCSCAN_EXTS = {".md", ".txt", ".rst"}
+"""Text formats the LOCAL semantic docscan always covers - UNION semantics with
+CODE_EXTS (owner ruling 2026-10-02): .txt became reviewable code, but a prose
+secret in a .txt must still be caught ON-MACHINE by the docscan, not merely shown
+to the external reviewer."""
+
+
 def _staged_doc_files():
-    """(scannable, oversized): staged non-code text files split by size. `scannable` (<=25MB,
+    """(scannable, oversized): staged doc-scan text files split by size.
+    DOCSCAN_EXTS code ALSO gets the docscan (union); other code stays reviewer-only. `scannable` (<=25MB,
     non-binary) go to the LOCAL docscan; `oversized` (>25MB) are too big to scan and are
-    REPORTED to the user, not silently dropped - NO layer covers them (pattern floor and the
+    REPORTED to the user. T3.2: their ADDED lines now ride the segmented docs scan (bounded chunk budget); the pattern floor still skips the >25MB blob (the OLD claim 'NO layer covers them' retired - gate round gate_20261009-041145).
     docs model both skip >25MB, and docs are never sent to the external reviewer)."""
     scannable, oversized = [], []
     for f in _all_staged_files():
-        if _is_code(f):
-            continue
+        if _is_code(f) and os.path.splitext(f)[1].lower() not in DOCSCAN_EXTS:
+            continue          # reviewer-only code; DOCSCAN_EXTS code ALSO docscanned
         try:
             blob = _run_git(["show", ":" + f], binary=True)
         except SystemExit:
@@ -747,6 +943,7 @@ def cmd_check(auto_review=False):
                          "still audits anything pushed from it.\n")
         return 0
     root = _repo_root()
+    _warn_flagged_audits(root)
     files = _staged_code_files()   # merges are NOT exempt: a merge can carry un-gated
     # commits (adversary finding, gate birth review 2026-08-30) - the staged result is
     # reviewable like any other change
@@ -766,14 +963,31 @@ def cmd_check(auto_review=False):
     # is consumed only when it truly bypassed a block. Graceful-degrade (loud); never crashes
     # the hook; never a silent pass.
     doc_files, oversized_docs = _staged_doc_files()
+    # T3.2 / H2: oversized docs JOIN the semantic scan - the old blob-size split
+    # wrongly excluded a >25MB file whose ADDED text was small, and one scan()
+    # call caps at 24x6000 chars; scan_segmented covers any size at line bounds.
     for f in oversized_docs:
-        sys.stderr.write("adversary gate: doc %s is >25MB - NOT scanned by any layer (pattern "
-                         "floor and the docs model both skip it; docs are not sent to the "
-                         "external reviewer). Review it manually.\n" % f)
-    if doc_files:
+        sys.stderr.write("adversary gate: doc %s is >25MB - its ADDED lines now ride the "
+                         "segmented docs scan (the untracked bulk is not new content).\n" % f)
+    if doc_files or oversized_docs:   # T3.2: oversized-only stages scan too (gate round
+                                       # gate_20261009-040408: the old doc_files-only guard
+                                       # skipped them while the new warning printed anyway)
+        # T4.4 (owner order 2026-10-09): version-keyed CLEAR cache - same added
+        # text + same model fingerprint + same rules epoch = same clear verdict;
+        # block/degraded NEVER cache (they must re-run and stay diagnosable).
+        # The ENTIRE block stays inside the try (gate round gate_20261009-080737:
+        # hoisting the text computation out broke the "docs layer must NEVER
+        # crash the hook" guarantee - _staged_doc_added_text raises SystemExit
+        # on git failure and must degrade, not kill cmd_check).
         try:
-            res = (docscan.scan(_staged_doc_added_text(doc_files)) if docscan
-                   else {"status": "degraded", "detail": "docscan module unavailable"})
+            _dc_text = _staged_doc_added_text(doc_files + oversized_docs)
+            _dc_res = _docscan_cache_lookup(root, _dc_text)
+            if _dc_res is not None:
+                res = _dc_res
+            else:
+                res = (docscan.scan_segmented(_dc_text) if docscan
+                       else {"status": "degraded", "detail": "docscan module unavailable"})
+                _docscan_cache_store(root, _dc_text, res)
         except (Exception, SystemExit) as e:     # incl. _run_git's SystemExit on git failure -
             # the docs layer must NEVER crash the hook: a too-long pathspec / git error /
             # docscan bug degrades loudly (pattern floor + code gate still enforce).
@@ -813,16 +1027,21 @@ def cmd_check(auto_review=False):
         os.remove(ov)
         return 0
     clear = _load_clear(root)
+    epoch_now = _current_rules_epoch(root)   # H4: clearances are epoch-bound
     bad = []
     for f in files:
         sha = _staged_sha(f)
         row = clear.get(f)
-        if not row or row.get("sha") != sha or row.get("verdict") != "CLEAR":
+        if not row or row.get("sha") != sha or row.get("verdict") not in ("CLEAR", "WARN"):
             bad.append((f, "stale" if row else "unreviewed"))
+        elif str(row.get("epoch", "0")) != epoch_now:
+            bad.append((f, "stale (rules epoch advanced - re-review under current rules)"))
     for key, sha in removals.items():
         row = clear.get(key)
-        if not row or row.get("sha") != sha or row.get("verdict") != "CLEAR":
+        if not row or row.get("sha") != sha or row.get("verdict") not in ("CLEAR", "WARN"):
             bad.append((key, "stale" if row else "unreviewed (code removal)"))
+        elif str(row.get("epoch", "0")) != epoch_now:
+            bad.append((key, "stale (rules epoch advanced - re-review under current rules)"))
     if not bad:
         return 0
     if auto_review:
@@ -851,7 +1070,7 @@ def _review_outcome(text):
     if not markers:
         return "incomplete"
     final = lines[-1]
-    if len(markers) == 1 and final in {"VERDICT: CLEAR", "VERDICT: BLOCK"}:
+    if len(markers) == 1 and final in {"VERDICT: CLEAR", "VERDICT: BLOCK", "VERDICT: WARN"}:
         return final.split(": ")[1]
     return "malformed"
 
@@ -895,6 +1114,10 @@ def _review_attempt(attempts, model, provider, outcome, text=None, error=None):
     sys.stderr.write("adversary review attempt: " + json.dumps(record) + "\n")
 
 
+class BatchReviewPending(SystemExit):
+    """A paid batch is still pending; resume it rather than paying a fallback."""
+
+
 def _call_model(model, user_content, timeout=1200, *, attempts=None):
     """Compatibility API: (text, usage, model_used); optional caller-owned attempt log."""
     return _call_model_ex(model, user_content, timeout, attempts=attempts)[:3]
@@ -909,6 +1132,9 @@ def _call_model_ex(model, user_content, timeout=1200, *, attempts=None):
     for m in chain:
         try:
             text, usage, provider = _call_one_model(m, user_content, timeout)
+        except BatchReviewPending as exc:
+            _review_attempt(history, m, None, "pending", error=exc)
+            raise
         except IncompleteReviewResponse as exc:
             _review_attempt(history, m, exc.provider, "incomplete", text=exc.text)
             continue
@@ -1032,7 +1258,7 @@ def _jev_decide(payload_chars, rebuttal, rungs):
     if not key:
         return None
     state = ("pre-commit adversarial review routing. payload_chars=%d rebuttal_round=%s "
-             "chain_rungs=%d promote_threshold_chars=%s default_primary=openai/gpt-6-luna-pro "
+             "chain_rungs=%d promote_threshold_chars=%s default_primary=deepseek/deepseek-v4-pro-0813 "
              "candidate_primary=deepseek/deepseek-v4-pro-0813 candidate_rationale=the "
              "deepseek pins have measured prompt-cache reads; promote only when the "
              "cache/cost tradeoff favors deepseek-first for "
@@ -1090,12 +1316,37 @@ def _route_chain(model, payload, context):
     return model, "default"
 
 
+def _output_token_budget(user_content):
+    """R3 (owner order 2026-10-08): the output ceiling DERIVED FROM PAYLOAD
+    SIZE - floor + a fixed share of the payload's estimated tokens, hard-capped
+    so a runaway composition bug still cannot bill unbounded output. Only the
+    VARIABLE payload counts (the system prompt is constant; counting it would
+    lift even an empty payload above the floor). A flat cap starves reasoning
+    reviewers on big payloads: live 2026-10-08, every tier-2 rung hit
+    finish_reason=length with 100% reasoning tokens and zero content at flat
+    2000 (and 8000, and 16000) on a 132,486-token review."""
+    payload_tokens = len(user_content) // 4
+    budget = MAX_OUTPUT_TOKENS + payload_tokens * OUTPUT_TOKENS_PER_INPUT_PCT // 100
+    return min(budget, MAX_OUTPUT_TOKENS_CAP)
+
+
 def _call_one_model(entry, user_content, timeout=1200):
     fake = os.environ.get("ADVERSARY_FAKE")               # selftests only - no network
     if fake:
         root = os.path.basename(_repo_root())
         if root.startswith("advgate_") and os.environ.get("ADVERSARY_SELFTEST") == "1":
-            return ("(faked verdict for selftest)\nVERDICT: %s" % fake), {}, "fake"
+            # sequence mode (owner order 2026-10-08, tiering selftests): "BLOCK,CLEAR"
+            # consumes one verdict per model call, repeating the last element; optional
+            # ADVERSARY_FAKE_BODY prepends findings prose (WARN-tier tests).
+            global _FAKE_CALLS
+            seq = [p.strip() for p in fake.split(",") if p.strip()] or [fake]
+            verdict = seq[min(_FAKE_CALLS, len(seq) - 1)]
+            _FAKE_CALLS += 1
+            body = os.environ.get("ADVERSARY_FAKE_BODY", "").strip()
+            head = "(faked verdict for selftest)\n" + (body + "\n" if body else "")
+            if verdict == "ERROR":                     # faked provider death (tiering
+                raise SystemExit("ADVERSARY FAKE: faked provider death for selftest")
+            return (head + "VERDICT: %s" % verdict), {}, "fake"
         sys.stderr.write("ADVERSARY_FAKE ignored outside a selftest repo (adversary "
                          "finding, birth review r2) - running the REAL reviewer.\n")
     model, order = _split_entry(entry)
@@ -1104,11 +1355,23 @@ def _call_one_model(entry, user_content, timeout=1200):
             raise SystemExit("ADVERSARY GATE: provider pins apply to OpenRouter entries only "
                              "(%r routes to api.x.ai)" % entry)   # routing there - a pin would be a lie
         return _call_xai(model[len("xai:"):], user_content, timeout)
+    if model.startswith("local:"):                        # local rung (owner order 2026-09-30):
+        if order:                                         # an Ollama-compatible endpoint, same
+            raise SystemExit("ADVERSARY GATE: provider pins apply to OpenRouter entries only "
+                             "(%r routes to the local endpoint)" % entry)   # shape - a pin would be a lie
+        return _call_local(model[len("local:"):], user_content, timeout)
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not key:
         raise SystemExit("ADVERSARY GATE: OPENROUTER_API_KEY not set - the gate cannot run. "
                          "(Owner emergencies: see the OVERRIDE escape in the tool docstring.)")
-    body = {"model": model, "temperature": 0.2,
+    if model.endswith(":batch"):
+        if order:
+            raise SystemExit("ADVERSARY GATE: batch reviews use the batch model route without interactive pins")
+        try:
+            return _call_batch_model(model, user_content, key, timeout=timeout)
+        except (OSError, http.client.HTTPException, ValueError, TypeError, KeyError) as exc:
+            raise SystemExit("ADVERSARY GATE: batch transport failed closed; saved jobs retained: " + str(exc))
+    body = {"model": model, "temperature": 0.2, "max_tokens": _output_token_budget(user_content),
             "messages": [{"role": "system", "content": PROMPT},
                          {"role": "user", "content": user_content}]}
     if order:
@@ -1151,6 +1414,128 @@ def _call_one_model(entry, user_content, timeout=1200):
             raise SystemExit("ADVERSARY GATE: network/read error reaching OpenRouter: %r"
                              % (getattr(e, "reason", e),))
     return _parse_completion(d)
+
+
+def _call_batch_model(model, user_content, key, transport=None, sleep=time.sleep,
+                      timeout=1200, clock=time.monotonic):
+    """Use the existing batch API; persist the paid job before waiting for its verdict."""
+    suite = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if suite not in sys.path:
+        sys.path.insert(0, suite)
+    from autoland.scan_queue import LiveBatchTransport
+    tx = transport or LiveBatchTransport()
+    deadline = clock() + timeout
+    body = {"endpoint": "/v1/chat/completions", "model": model,
+            "requests": [{"custom_id": "scan", "body": {"temperature": 0.2,
+                "max_tokens": _output_token_budget(user_content),
+                "messages": [{"role": "system", "content": PROMPT},
+                             {"role": "user", "content": user_content}]}}]}
+    raw = json.dumps(body).encode("utf-8")
+    request_sha = hashlib.sha256(raw).hexdigest()
+    root = _repo_root()
+    receipt_name = "batch-review-" + request_sha + ".json"
+    receipt_path = os.path.join(_adv_dir(root), receipt_name)
+    adv = _adv_dir(root)
+    fd = _adv_lock(adv, receipt_name, deadline_s=min(30, timeout))
+    if fd is None:
+        raise BatchReviewPending("ADVERSARY GATE: exact batch submission is busy; retry without fallback")
+    try:
+        receipt = {}
+        if os.path.isfile(receipt_path):
+            with open(receipt_path, encoding="utf-8") as stream:
+                receipt = json.load(stream)
+            if receipt.get("request_sha256") != request_sha or receipt.get("model") != model:
+                raise SystemExit("ADVERSARY GATE: batch receipt does not match exact review input")
+        batch_id = receipt.get("batch_id")
+        if receipt and not batch_id and receipt.get("submission") != "rejected":
+            raise BatchReviewPending("ADVERSARY GATE: ambiguous paid submission; reconcile provider job before resubmitting exact input " + request_sha)
+        if not batch_id:
+            intent = {"request_sha256": request_sha, "model": model,
+                      "batch_id": None, "submission": "in_flight"}
+            _save_json(root, receipt_name, intent)  # Durable BEFORE the acceptance window.
+            try:
+                job = tx._req("POST", "https://openrouter.ai/api/v1/batches", key, raw)
+            except urllib.error.HTTPError as exc:
+                if exc.code in {400, 401, 403, 404, 422, 429}:
+                    try:
+                        _save_json(root, receipt_name, dict(intent, submission="rejected"))
+                    except Exception:
+                        raise BatchReviewPending("ADVERSARY GATE: submission receipt could not be updated; reconcile saved intent")
+                    raise SystemExit("ADVERSARY GATE: batch submission rejected (HTTP %d)" % exc.code)
+                raise BatchReviewPending("ADVERSARY GATE: ambiguous submission response; saved intent requires reconciliation")
+            except Exception:
+                raise BatchReviewPending("ADVERSARY GATE: submission response lost; saved intent prevents duplicate fallback")
+            if not isinstance(job, dict):
+                raise BatchReviewPending("ADVERSARY GATE: submission response is not an object; reconcile saved intent before resubmitting")
+            batch_id = job.get("id")
+            if not isinstance(batch_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", batch_id):
+                raise BatchReviewPending("ADVERSARY GATE: accepted response has no valid job ID; reconcile saved intent")
+            try:
+                _save_json(root, receipt_name, {"request_sha256": request_sha,
+                                               "model": model, "batch_id": batch_id})
+            except Exception:
+                raise BatchReviewPending("ADVERSARY GATE: accepted job %s could not be persisted; reconcile saved intent" % batch_id)
+    finally:
+        _adv_unlock(adv, receipt_name, fd)
+    if not isinstance(batch_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", batch_id):
+        raise SystemExit("ADVERSARY GATE: invalid saved batch job ID")
+    def progress(message):
+        try:
+            # stdout belongs to JSON-RPC when this reviewer runs inside MCP.
+            print(message, flush=True, file=sys.stderr)
+        except OSError:
+            raise BatchReviewPending("ADVERSARY GATE: output unavailable; resume saved batch %s without fallback" % batch_id)
+    progress("adversary batch review: %s via %s (exact input %s)" %
+             (batch_id, model, request_sha))
+    previous = None
+    not_found_retries = 0
+    while True:
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise BatchReviewPending("ADVERSARY GATE: batch %s still pending; resume the same exact input (no fallback submitted)" % batch_id)
+        try:
+            state = str(tx.status(batch_id, key)).lower()
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404 and not_found_retries < 8:
+                not_found_retries += 1
+                sleep(min(15, remaining))  # A newly accepted batch may not yet reach the status replica.
+                continue
+            if exc.code != 429 and exc.code < 500:
+                raise BatchReviewPending("ADVERSARY GATE: batch status refused (HTTP %d); resume saved job without fallback" % exc.code)
+            sleep(min(15, remaining))
+            continue
+        except (OSError, http.client.HTTPException):
+            sleep(min(15, remaining))
+            continue  # Keep the paid job; never resubmit on a transient polling failure.
+        except Exception:
+            raise BatchReviewPending("ADVERSARY GATE: batch status response is unusable; resume saved job without fallback")
+        if state != previous:
+            progress("adversary batch status: " + state)
+            previous = state
+        if state == "completed":
+            try:
+                output = tx.fetch(batch_id, key)
+            except (OSError, http.client.HTTPException):
+                raise BatchReviewPending("ADVERSARY GATE: completed batch fetch failed; resume saved job without fallback")
+            if not isinstance(output, str):
+                raise SystemExit("ADVERSARY GATE: batch output must be JSONL text")
+            try:
+                records = [json.loads(line) for line in output.splitlines() if line.strip()]
+            except (TypeError, ValueError):
+                raise SystemExit("ADVERSARY GATE: batch output contains invalid JSON")
+            if len(records) != 1 or not isinstance(records[0], dict) or records[0].get("custom_id") != "scan":
+                raise SystemExit("ADVERSARY GATE: batch output does not identify the single exact review request")
+            response = records[0].get("response") or {}
+            if not isinstance(response, dict):
+                raise SystemExit("ADVERSARY GATE: batch output response must be an object")
+            if response.get("status_code", 200) != 200:
+                raise SystemExit("ADVERSARY GATE: batch review returned an error response")
+            return _parse_completion(response.get("body"))
+        if state in {"failed", "expired", "cancelled"}:
+            raise SystemExit("ADVERSARY GATE: batch review failed closed with state " + state)
+        if state not in {"validating", "validation", "queued", "in_progress", "finalizing", "cancelling"}:
+            raise BatchReviewPending("ADVERSARY GATE: unknown batch status; resume saved job without fallback")
+        sleep(min(15, remaining))
 
 
 def _parse_completion(d):
@@ -1232,6 +1617,7 @@ def _call_xai(model, user_content, timeout):
     key = _read_xai_key()
     body = {"model": model, "instructions": PROMPT, "temperature": 0.2,
             "reasoning": {"effort": "high"}, "stream": False,
+            "max_output_tokens": _output_token_budget(user_content),
             "input": [{"role": "user", "content": user_content}]}
     req = urllib.request.Request(
         XAI_API_URL, data=json.dumps(body).encode("utf-8"),
@@ -1272,6 +1658,48 @@ def _call_xai(model, user_content, timeout):
     text = "\n".join(texts)
     _completion_guard(text, unfinished, "xai")
     return text, (d.get("usage", {}) if isinstance(d, dict) else {}), "xai"
+
+
+def _call_local(model, user_content, timeout):
+    """The local rung (owner order 2026-09-30): an Ollama-compatible OpenAI endpoint on this
+    machine. Same chat-completions request/response shape, so _parse_completion serves as-is;
+    NO Authorization header - the OpenRouter key never rides a local socket, and the local
+    server has no key to check. Connection refused / DNS / read errors fail CLOSED exactly
+    like the OpenRouter transport (SystemExit advances the fallback chain), so a stopped
+    Ollama can never wedge the gate. The URL is read per call so selftests and the replay
+    harness can override ADVERSARY_LOCAL_URL after import."""
+    _local_vram_guard(model)
+    url = os.environ.get("ADVERSARY_LOCAL_URL") or LOCAL_API_URL_DEFAULT
+    body = {"model": model, "temperature": 0.2,
+            "max_tokens": _output_token_budget(user_content),
+            "messages": [{"role": "system", "content": PROMPT},
+                         {"role": "user", "content": user_content + LOCAL_FORMAT_SUFFIX}]}
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                raw = r.read()
+            try:
+                d = json.loads(raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError) as je:
+                # a 200 with a non-JSON body fails CLOSED as SystemExit so the chain
+                # advances - same rule as the OpenRouter path (chain review r4).
+                raise SystemExit("ADVERSARY GATE: unreadable local model response (%s): %s"
+                                 % (type(je).__name__, raw.decode("utf-8", "replace")[:200]))
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 3:
+                sys.stderr.write("adversary local model 429 - retry %d/3 in 30s\n" % (attempt + 1))
+                time.sleep(30)
+                continue
+            raise SystemExit("ADVERSARY GATE: local endpoint HTTP %s: %s"
+                             % (e.code, e.read().decode("utf-8", "replace")[:300]))
+        except (OSError, http.client.HTTPException) as e:
+            raise SystemExit("ADVERSARY GATE: network/read error reaching the local endpoint: %r"
+                             % (getattr(e, "reason", e),))
+    return _parse_completion(d)
 
 
 def _review_head():
@@ -1646,6 +2074,680 @@ def _print_removed_symbol_refusal(hits, stream):
                  "symbol. No clearance is written.\n")
 
 
+# ---------------------------------------------------------------------------
+# Tiered review, local pre-gate, scoped windows, sampled batch audits
+# (owner order 2026-10-08; contract: docs/plans/2026-10-08-tiered-gate-grafts.md)
+# ---------------------------------------------------------------------------
+
+_PREGATE_TOOL_TIMEOUT_S = 20
+_SCOPED_WINDOW_MAX = 40_000
+_TS_LANG_BY_EXT = {".py": "python", ".js": "javascript", ".mjs": "javascript",
+                   ".cjs": "javascript", ".ts": "typescript", ".tsx": "tsx",
+                   ".jsx": "jsx", ".json": "json", ".sh": "bash", ".bash": "bash",
+                   ".css": "css", ".html": "html", ".htm": "html"}
+_TS_DEF_TYPES = ("function_definition", "class_definition", "function_declaration",
+                 "class_declaration", "method_definition", "method_declaration",
+                 "lexical_declaration", "export_statement")
+
+
+def _tier_split(model):
+    """(tier1_entries, tier2_entries). A manual override or ADVERSARY_TIER1_OFF gives
+    a single tier running the WHOLE chain verbatim (the pre-2026-10-08 semantics)."""
+    entries = [m.strip() for m in model.split(",") if m.strip()]
+    # The tier split keys on the LITERAL default chain (gate round gate_20261008-122413,
+    # HIGH F2): DEFAULT_MODEL is env-injectable, so keying on it force-split an
+    # ADVERSARY_MODEL override into tier1/tier2 with the wrong timeout. Explicit
+    # overrides ALWAYS run single-tier, whole chain verbatim.
+    if os.environ.get("ADVERSARY_TIER1_OFF", "0") == "1" or model != DEFAULT_CHAIN:
+        return [], entries
+    n1 = len([m for m in TIER1_CHAIN.split(",") if m.strip()])
+    return entries[:n1], entries[n1:]
+
+
+def _tier1_eligible(payload, files, removals, context, blobs):
+    """Quick-rung eligibility: small payloads with no rebuttal, no removals, no gated
+    prefixes and no oversize blobs - everything substantive rides the strong rung."""
+    if context.strip() or removals:
+        return False
+    if any(f.startswith(GATED_PREFIXES) for f in files):
+        return False
+    # gate round gate_20261008-141847 (MEDIUM): hook files are enforcement-critical
+    # wherever they live (the hook_files_are_code_anywhere ruling) - they never
+    # ride the quick rung
+    if any(os.path.basename(f) in HOOK_NAMES for f in files):
+        return False
+    if any(len(blob) > MAX_FILE_BYTES for _f, blob in blobs):
+        return False
+    return len(payload) < TIER1_MAX_CHARS
+
+
+def _audit_sampled(tree_sha):
+    """Deterministic tree+day hash sampling of tier-1 CLEARs for the batch audit."""
+    if AUDIT_PCT <= 0:
+        return False
+    if AUDIT_PCT >= 100:
+        return True
+    day = datetime.date.today().isoformat()
+    h = int(hashlib.sha256(("%s|%s" % (tree_sha, day)).encode("utf-8")).hexdigest()[:12], 16)
+    return h % 100 < AUDIT_PCT
+
+
+def _enqueue_audit(root, tree_sha, payload, files, artifact):
+    qdir = os.path.join(_adv_dir(root), "audit_queue")
+    os.makedirs(qdir, exist_ok=True)
+    name = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + tree_sha[:10]
+    with open(os.path.join(qdir, name + ".payload"), "w", encoding="utf-8",
+              errors="replace") as stream:
+        stream.write(payload)
+    tmp = os.path.join(qdir, name + ".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as stream:
+        json.dump({"queued": name, "tree": tree_sha, "files": sorted(files),
+                   "artifact": str(artifact), "model": TIER2_AUDIT_MODEL}, stream, indent=1)
+    os.replace(tmp, os.path.join(qdir, name + ".json"))
+    return name
+
+
+def _spawn_audit_drain(root):
+    """Best-effort detached drain; the queue is durable either way. Disabled by
+    ADVERSARY_AUDIT_NOSPAWN=1 (selftests and operators who drain manually)."""
+    if os.environ.get("ADVERSARY_AUDIT_NOSPAWN", "0") == "1":
+        return
+    try:
+        log = open(os.path.join(_adv_dir(root), "audit_drain.log"), "a", encoding="utf-8")
+        flags = (0x00000008 | 0x00000200) if os.name == "nt" else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "audit-drain",
+                          "--limit", "4"],
+                         stdout=log, stderr=log, creationflags=flags, close_fds=True,
+                         cwd=str(root))
+    except Exception as exc:
+        print("adversary gate: audit drain not spawned (%s) - run "
+              "`python adversary_gate.py audit-drain` later; the queue keeps every "
+              "entry." % str(exc)[:120])
+
+
+def _warn_flagged_audits(root):
+    """Loud, non-blocking warning when a sampled audit contradicted a landed CLEAR."""
+    try:
+        path = os.path.join(_adv_dir(root), "audit_findings.jsonl")
+        if not os.path.isfile(path):
+            return
+        blocks = 0
+        with open(path, encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("outcome") == "BLOCK":
+                    blocks += 1
+        if blocks:
+            sys.stderr.write("ADVERSARY GATE: WARNING - %d sampled tier-1 audit(s) "
+                             "returned BLOCK on landed commits (.adversary/"
+                             "audit_findings.jsonl). Inspect the trees, remediate, and "
+                             "add docket rows for any real catch.\n" % blocks)
+    except Exception:
+        pass
+
+
+def cmd_audit_drain(limit=4):
+    """Drain queued tier-1 batch audits. BATCH POLICY (owner order 2026-10-08): the
+    interactive commit path NEVER uses the batch API - only these post-hoc sampled
+    audits do (50% off, zero commit latency; hours-scale completion is acceptable
+    precisely because nothing waits on the verdict)."""
+    root = _repo_root()
+    qdir = os.path.join(_adv_dir(root), "audit_queue")
+    if not os.path.isdir(qdir):
+        print("adversary audit: queue empty.")
+        return 0
+    # T2.5 / hole H3 (gate top-to-bottom): probe the audit model against the LIVE
+    # catalog before submitting - a delisted default dead-letters every sampled
+    # audit (the ds-pro:batch incident). Probe failures degrade loud and skip
+    # this drain (entries stay queued); only a POSITIVE delist blocks the run.
+    if os.environ.get("ADVERSARY_SELFTEST") == "1":   # hermetic selftests -
+        sys.stderr.write("adversary audit: catalog probe skipped (selftest hermetic mode).\n")
+    else:
+        try:
+            key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+            req = urllib.request.Request("https://openrouter.ai/api/v1/models",
+                                         headers={"Authorization": "Bearer " + key})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                catalog = json.loads(resp.read().decode("utf-8"))
+            ids = {m.get("id") for m in catalog.get("data", [])}
+            base = TIER2_AUDIT_MODEL.split(":")[0]
+            # gate round gate_20261009-014204: the :batch suffix is ROUTING, not a
+            # catalog id - this probe catches delisting of the UNDERLYING model (the
+            # ds-pro incident); a base-listed-but-:batch-rejected submission is owned
+            # downstream by the terminal rejected-receipt dead-letter path.
+            if base not in ids:
+                print("ADVERSARY AUDIT: model %s is NOT in the live catalog (delisted?) "
+                      "- drain SKIPPED, entries preserved; re-pin TIER2_AUDIT_MODEL." % base)
+                return 1
+        except Exception as exc:
+            sys.stderr.write("adversary audit: catalog probe unavailable (%s) - degrading - drain SKIPPED, entries stay queued "
+                             "Re-run when the catalog is reachable.\n" % str(exc)[:100])
+            return 1
+    done = pending = 0
+    for name in sorted(os.listdir(qdir)):
+        if done + pending >= max(1, limit):
+            break
+        if not name.endswith(".json"):
+            continue
+        meta_path = os.path.join(qdir, name)
+        # gate round gate_20261008-122413, HIGH F3: item-level locking - two drains
+        # (spawned background + manual) must never process one paid entry twice or
+        # race the removals. A busy entry belongs to the drain holding its lock.
+        # gate_20261008-144437 (MEDIUM): a drain lock is held across the batch call,
+        # so a dead drain orphans it - and its holder's lifetime is BOUNDED by
+        # construction (the audit timeout), unlike review locks: a lock older than
+        # that bound + margin has no live holder by definition and is stolen.
+        lock_name = name + ".drain"
+        lock_fd = _adv_lock(qdir, lock_name, deadline_s=1)
+        if lock_fd is None:
+            lock_path = os.path.join(qdir, lock_name + ".lock")
+            try:
+                _age = time.time() - os.path.getmtime(lock_path)
+            except OSError:
+                _age = 0.0
+            if _age > _env_int("ADVERSARY_AUDIT_TIMEOUT", 3600) + 300:
+                # rename, never remove+recreate (gate round gate_20261008-152545,
+                # MEDIUM): the rename is atomic - the losing drain's rename fails on
+                # the vanished path and it then sees the winner's NEW lock, so two
+                # steals can never both proceed on one entry
+                stamp = os.path.join(qdir, "%s.steal-%d.lock" % (lock_name, os.getpid()))
+                try:
+                    os.rename(lock_path, stamp)
+                except OSError:
+                    pass          # another drain stole it first - its lock now stands
+                else:
+                    sys.stderr.write("adversary audit: stole orphaned drain lock %s "
+                                     "(age %ds exceeds the audit-timeout bound)\n"
+                                     % (lock_name, int(_age)))
+                    try:
+                        os.remove(stamp)
+                    except OSError:
+                        pass
+                lock_fd = _adv_lock(qdir, lock_name, deadline_s=1)
+        if lock_fd is None:
+            pending += 1
+            print("adversary audit: %s locked by another drain - left for its owner."
+                  % name)
+            continue
+        try:
+            try:
+                with open(meta_path, encoding="utf-8") as stream:
+                    meta = json.load(stream)
+                with open(os.path.join(qdir, meta["queued"] + ".payload"), encoding="utf-8",
+                          errors="replace") as stream:
+                    payload = stream.read()
+            except (OSError, ValueError, KeyError) as exc:
+                print("adversary audit: unreadable queue entry %s (%s) - skipping."
+                      % (name, str(exc)[:100]))
+                continue
+            try:
+                text, usage, provider = _call_one_model(
+                    TIER2_AUDIT_MODEL, payload,
+                    _env_int("ADVERSARY_AUDIT_TIMEOUT", 3600))
+            except BatchReviewPending as exc:
+                pending += 1
+                print("adversary audit: %s still pending - kept for resume (%s)"
+                      % (meta["queued"], str(exc)[:120]))
+                continue
+            except SystemExit as exc:
+                # gate round gate_20261008-144437 (MEDIUM): a terminal batch
+                # failure must free the queue, never resubmit forever - the entry
+                # is dead-lettered WITH an evidence row; move the files back into
+                # audit_queue/ to retry by hand.
+                dead = os.path.join(qdir, "dead")
+                os.makedirs(dead, exist_ok=True)
+                for _p in (meta_path,
+                           os.path.join(qdir, meta["queued"] + ".payload")):
+                    try:
+                        os.rename(_p, os.path.join(dead, os.path.basename(_p)))
+                    except OSError:
+                        pass
+                with open(os.path.join(_adv_dir(root), "audit_findings.jsonl"), "a",
+                          encoding="utf-8") as stream:
+                    stream.write(json.dumps({
+                        "when": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
+                        "queued": meta["queued"], "tree": meta.get("tree"),
+                        "model": TIER2_AUDIT_MODEL, "outcome": "REJECTED",
+                        "text_head": str(exc)[:500]}) + "\n")
+                print("adversary audit: %s terminally rejected - dead-lettered to "
+                      "audit_queue/dead/ (an evidence row was written; move the "
+                      "files back to retry)." % meta["queued"])
+                continue
+            outcome = _review_outcome(text)
+            if outcome == "WARN":
+                # single authority (F8/F17 divergence class)
+                if not _warn_proven_low(text, meta.get("files") or []):
+                    outcome = "BLOCK"
+            row = {"when": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
+                   "queued": meta["queued"], "tree": meta.get("tree"),
+                   "artifact": meta.get("artifact"),
+                     "model": TIER2_AUDIT_MODEL, "provider": str(provider),
+                   "outcome": outcome if outcome in ("CLEAR", "WARN", "BLOCK") else "BLOCK",
+                   "text_head": text[:2000]}
+            with open(os.path.join(_adv_dir(root), "audit_findings.jsonl"), "a",
+                      encoding="utf-8") as stream:
+                stream.write(json.dumps(row) + "\n")
+            os.remove(meta_path)
+            try:
+                os.remove(os.path.join(qdir, meta["queued"] + ".payload"))
+            except OSError:
+                pass
+            done += 1
+            print("adversary audit: %s -> %s (%s)" % (meta["queued"], row["outcome"], row["model"]))
+            if row["outcome"] == "BLOCK":
+                print("ADVERSARY AUDIT: tier-1 CLEAR CONTRADICTED on tree %s - inspect and "
+                      "remediate; a real catch owes a docket row." % str(meta.get("tree"))[:12])
+        finally:
+            _adv_unlock(qdir, name + ".drain", lock_fd)
+    print("adversary audit: drained %d, pending %d." % (done, pending))
+    return 0
+
+
+def _pregate_run(cmd, src):
+    """Run one linter reading stdin; (rc, stdout, stderr) or None when the tool is
+    missing or times out (degrade-loud, never a block, never a crash)."""
+    import shutil
+    exe = shutil.which(cmd[0])
+    if not exe:
+        return None
+    try:
+        r = subprocess.run([exe] + cmd[1:], input=src, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
+                           timeout=_PREGATE_TOOL_TIMEOUT_S)
+        return r.returncode, r.stdout or "", r.stderr or ""
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _pbt_pregate(files):
+    """T1.2 (owner order 2026-10-08): opt-in property-suite rung. Runs the
+    hypothesis battery when staged code touches the gate engine or the suite
+    itself; blocks ONLY on a real pytest failure (rc != 0 - a property failure
+    is a violated invariant by construction); absent tools or a timeout degrade
+    loud and never block. ADVERSARY_PREGATE_PBT=1 enables (default off)."""
+    if os.environ.get("ADVERSARY_PREGATE_PBT", "0") != "1":
+        return None
+    if not any(f == "adversary-gate/adversary_gate.py" or f.startswith("tests/properties/")
+               for f in files):
+        return None
+    root = _repo_root()
+    if not os.path.isdir(os.path.join(root, "tests", "properties")):
+        sys.stderr.write("adversary gate: property battery absent - degraded "
+                         "(the model reviewer still runs).\n")
+        return None
+    # a MISSING pytest/hypothesis is an absent tool, not a failed invariant (gate
+    # round gate_20261009-005859: `python -m pytest` exits rc 1 with 'No module
+    # named' - that must degrade, never block)
+    import importlib.util
+    for _mod in ("pytest", "hypothesis"):
+        if importlib.util.find_spec(_mod) is None:
+            sys.stderr.write("adversary gate: property battery unavailable - %s not "
+                             "installed; degraded (the model reviewer still runs).\n"
+                             % _mod)
+            return None
+    try:
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                            "tests/properties"], cwd=root, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace",
+                           timeout=_env_int("ADVERSARY_PREGATE_PBT_TIMEOUT", 120))
+    except subprocess.TimeoutExpired:
+        sys.stderr.write("adversary gate: property battery TIMEOUT - degraded "
+                         "(the model reviewer still runs).\n")
+        return None
+    except OSError as exc:
+        sys.stderr.write("adversary gate: property battery could not run (%s) - degraded.\n"
+                         % str(exc)[:100])
+        return None
+    if r.returncode == 0:
+        return None
+    lines = [l for l in (r.stdout or "").splitlines() if l.strip()][-6:]
+    # gate round gate_20261009-003823 (MEDIUM): a non-zero pytest with NO stdout
+    # must still block - never a falsy "" on the failure path
+    return " | ".join(lines) or ("pytest exited rc=%d with no stdout captured" % r.returncode)
+
+
+_PREGATE_CACHE_MAX = 2000
+# Bump when _pregate_check_one's CHECK LOGIC changes (new/stricter checks) - a
+# cached pass was produced by an older logic and must not survive the change
+# (gate round gate_20261009-085308 MEDIUM: tools+epoch keying alone goes stale
+# when the gate's own logic evolves).
+_PREGATE_LOGIC_VERSION = "1"
+_TOOL_VERSIONS = None   # per-process memo
+
+
+def _pregate_tool_versions():
+    """T4.1 (owner order 2026-10-09): tool versions for the cache key - a ruff,
+    biome or bash bump (or a python upgrade) invalidates every cached pass; the
+    cache can only SKIP work the current tools would redo identically."""
+    global _TOOL_VERSIONS
+    if _TOOL_VERSIONS is not None:
+        return _TOOL_VERSIONS
+    import shutil as _sh
+    v = {"python": sys.version.split()[0]}
+    for tool in ("ruff", "biome", "bash"):
+        exe = _sh.which(tool)
+        out = ""
+        if exe:
+            try:
+                r = subprocess.run([exe, "--version"], capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace", timeout=10)
+                out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+                out = out[0][:60] if out else ""
+            except (subprocess.TimeoutExpired, OSError):
+                out = ""
+        v[tool] = out or "absent"
+    _TOOL_VERSIONS = v
+    return v
+
+
+def _pregate_cache_load(root, epoch):
+    p = os.path.join(_adv_dir(root), "pregate_cache.json")
+    try:
+        if not os.path.isfile(p):
+            return {}
+        d = json.loads(open(p, encoding="utf-8").read())
+        if (d.get("tools") != _pregate_tool_versions()
+                or d.get("logic") != _PREGATE_LOGIC_VERSION
+                or str(d.get("epoch")) != str(epoch)):
+            return {}          # version/epoch/logic mismatch: every entry drops
+        entries = d.get("entries")
+        return entries if isinstance(entries, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _pregate_cache_save(root, epoch, entries):
+    """Best-effort persist under the shared .adversary lock; the cache is an
+    optimization - any failure degrades silently to re-running the checks."""
+    try:
+        adv = _adv_dir(root)
+        os.makedirs(adv, exist_ok=True)
+        fd = _adv_lock(adv, "pregate_cache", deadline_s=2)
+        if fd is None:
+            return
+        try:
+            items = dict(list(entries.items())[-_PREGATE_CACHE_MAX:])
+            data = {"tools": _pregate_tool_versions(), "logic": _PREGATE_LOGIC_VERSION,
+                    "epoch": str(epoch), "entries": items}
+            tmp = os.path.join(adv, "pregate_cache.json.tmp")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=1)
+            os.replace(tmp, os.path.join(adv, "pregate_cache.json"))
+        finally:
+            _adv_unlock(adv, "pregate_cache", fd)
+    except Exception:
+        pass
+
+
+def _pregate_check_one(f, src):
+    """One file's deterministic checks (T4.2: runs inside a worker thread).
+    Returns (fails[list], degraded[set]) - order-independent, no shared state."""
+    fails, degraded = [], set()
+    low = f.lower()
+    if low.endswith(".py"):
+        try:
+            compile(src, f, "exec")
+        except (SyntaxError, ValueError) as exc:
+            fails.append("py-compile %s: line %s: %s"
+                         % (f, getattr(exc, "lineno", "?"), str(exc)[:160]))
+            return fails, degraded
+        r = _pregate_run(["ruff", "check", "--no-cache", "--isolated",
+                          "--output-format=concise",
+                          "--select", "E9", "--stdin-filename", f, "-"], src)
+        # E9 (syntax) ONLY: F821 was rejected 2026-10-08 - it false-blocks
+        # dynamic-name code; dangling references are owned by the removed-symbol
+        # scan and the model reviewer (EV-124: deterministic layers never
+        # false-block).
+        if r is None:
+            degraded.add("ruff")
+        elif r[0] == 1:
+            hits = [ln for ln in r[1].splitlines()
+                    if re.search(r"\bE9\d{2}\b", ln)][:3]
+            fails.extend("ruff %s" % h[:180] for h in hits)
+    elif low.endswith((".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs")):
+        r = _pregate_run(["biome", "check", "--linter-enabled=false",
+                          "--formatter-enabled=false", "--assist-enabled=false",
+                          "--stdin-file-path=" + f], src)
+        if r is None:
+            degraded.add("biome")
+        elif r[0] != 0 and re.search(r"pars", (r[1] + r[2]), re.I):
+            first = [ln for ln in (r[1] + r[2]).splitlines() if ln.strip()][:2]
+            fails.append("biome-parse %s: %s" % (f, " / ".join(first)[:200]))
+    elif low.endswith(".json"):
+        try:
+            json.loads(src)
+        except ValueError as exc:
+            fails.append("json-parse %s: %s" % (f, str(exc)[:160]))
+    elif low.endswith((".sh", ".bash")):
+        r = _pregate_run(["bash", "-n", "-"], src)
+        if r is None:
+            degraded.add("bash")
+        elif r[0] != 0:
+            first = [ln for ln in (r[2] or r[1]).splitlines() if ln.strip()][:1]
+            fails.append("bash -n %s: %s"
+                         % (f, (first[0] if first else "syntax error")[:160]))
+    return fails, degraded
+
+
+def _local_pregate(files, blobs, root=None):
+    """G-A (owner order 2026-10-08): the $0 deterministic pre-gate over the ALREADY
+    FETCHED staged blobs (fetched once by the caller; this function performs no
+    git I/O so namespace-exec selftests keep working). Compile/parse failures the
+    paid reviewer would only rediscover are refused BEFORE any model call. Blocks
+    ONLY on genuine deterministic errors; absent tools degrade loud.
+    T4.1/T4.2 (owner order 2026-10-09): version+epoch-keyed PASS cache (same blob
+    + same tools + same rules epoch = same verdict, so a cached pass can never
+    skip a refusal) and parallel per-file checks; failures are never cached."""
+    if os.environ.get("ADVERSARY_PREGATE_OFF", "0") == "1":
+        return []
+    by_path = dict(blobs)
+    cacheable = (root is not None
+                 and os.path.isdir(os.path.join(root, ".git"))
+                 and os.environ.get("ADVERSARY_PREGATE_CACHE_OFF", "0") != "1")
+    import hashlib as _hl
+    epoch = _current_rules_epoch(root) if cacheable else ""
+    cache = _pregate_cache_load(root, epoch) if cacheable else {}
+    to_check, skipped = [], 0
+    keyed = []                       # (f, key) parallel to to_check
+    for f in files:
+        data = by_path.get(f)
+        if data is None:
+            continue
+        if not any(f.lower().endswith(ext) for ext in (
+                ".py", ".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs",
+                ".json", ".sh", ".bash")):
+            continue                 # unchecked extensions never touch the cache
+        key = _hl.sha256(data).hexdigest() + ":" + f.lower().rsplit(".", 1)[-1]
+        if key in cache:
+            skipped += 1
+            continue
+        try:
+            src = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue                 # not decodable: the model reviewer judges it
+        to_check.append((f, src))
+        keyed.append((f, key))
+    if to_check:
+        from concurrent.futures import ThreadPoolExecutor
+        workers = min(4, len(to_check))
+        if workers <= 1:
+            results = [_pregate_check_one(f, src) for f, src in to_check]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                results = list(ex.map(lambda pair: _pregate_check_one(*pair),
+                                      to_check))
+    else:
+        results = []
+    fails, degraded = [], set()
+    for (f, key), (one_fails, one_deg) in zip(keyed, results):
+        if one_fails:
+            fails.extend(one_fails)   # failures are NEVER cached
+        else:
+            if cacheable:
+                cache[key] = {"file": f, "when":
+                              datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}
+        degraded |= one_deg
+    if cacheable and cache:
+        _pregate_cache_save(root, epoch, cache)
+    if skipped:
+        sys.stderr.write("adversary gate: pregate cache skipped %d unchanged "
+                         "file(s) (tool+epoch keyed).\n" % skipped)
+    for tool in sorted(degraded):
+        sys.stderr.write("adversary gate: pre-gate tool '%s' %s unavailable/timed out - "
+                         "degraded (the model reviewer still runs).\n"
+                         % (tool, "(" + _pregate_tool_versions().get(tool, "?")[:40] + ")"))
+    return fails
+
+
+def _hunk_ranges(diff_text, path):
+    """New-file line ranges of `path`'s hunks in a unified multi-file diff."""
+    ranges = []
+    in_file = False
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            in_file = (" b/" + path) in line or line.endswith(" " + path)
+            continue
+        if not in_file:
+            continue
+        m = re.match(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@", line)
+        if m:
+            start = int(m.group(1))
+            count = int(m.group(2) or "1")
+            ranges.append((start, start + max(count, 1) - 1))
+    return ranges
+
+
+def _pad_range(a, b, n):
+    pad = 40
+    return (max(1, a - pad), min(n if n else b + pad, b + pad))
+
+
+def _ast_enclosing(tree, a, b):
+    """Innermost Python def/class whose span covers lines a..b, or None."""
+    best = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            end = getattr(node, "end_lineno", None) or node.lineno
+            if node.lineno <= a and end >= b:
+                if best is None or node.lineno > best.lineno:
+                    best = node
+    return best
+
+
+def _ts_enclosing(root_node, a, b):
+    """Deepest tree-sitter node covering lines a..b, climbed to a definition-like
+    ancestor; None when only the root covers the range."""
+    node = deepest = root_node
+    while True:
+        nxt = None
+        for child in node.children:
+            if child.start_point[0] <= a - 1 and child.end_point[0] >= b - 1:
+                nxt = child
+                break
+        if nxt is None:
+            break
+        node = deepest = nxt
+    cur = deepest
+    while cur is not None:
+        if cur.type in _TS_DEF_TYPES:
+            return cur
+        cur = cur.parent
+    return None if deepest is root_node else deepest
+
+
+def _merge_spans(spans):
+    out = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1] + 1:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def _scoped_window(path, blob, diff):
+    """G-B (owner order 2026-10-08): bounded enclosing-symbol window for an oversize
+    staged file (tree-sitter; Python ast fallback; padded-line last resort). Empty
+    string when nothing renderable fits."""
+    try:
+        text = blob.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+    lines = text.splitlines()
+    n = len(lines)
+    ranges = _hunk_ranges(diff, path) or [(1, min(200, n or 1))]
+    spans = []
+    parser = None
+    lang = _TS_LANG_BY_EXT.get(os.path.splitext(path)[1].lower())
+    if lang:
+        try:
+            from tree_sitter_language_pack import get_parser
+            parser = get_parser(lang)
+        except Exception:
+            parser = None
+    if parser is not None:
+        tree = parser.parse(text.encode("utf-8"))
+        for a, b in ranges:
+            # a hunk can span several symbols: resolve BOTH endpoints and let the
+            # merge cover every symbol between them (padding only when both fail)
+            for probe in (a, b):
+                node = _ts_enclosing(tree.root_node, probe, probe)
+                if node is not None and node is not tree.root_node:
+                    spans.append((node.start_point[0] + 1, node.end_point[0] + 1))
+                else:
+                    spans.append(_pad_range(probe, probe, n))
+    elif os.path.splitext(path)[1].lower() == ".py":
+        try:
+            tree = ast.parse(text)
+            for a, b in ranges:
+                for probe in (a, b):
+                    node = _ast_enclosing(tree, probe, probe)
+                    spans.append((node.lineno, getattr(node, "end_lineno", node.lineno))
+                                 if node else _pad_range(probe, probe, n))
+        except (SyntaxError, ValueError):
+            spans = [_pad_range(a, b, n) for a, b in ranges]
+    else:
+        spans = [_pad_range(a, b, n) for a, b in ranges]
+    rendered = []
+    size = 0
+    for a, b in _merge_spans(spans):
+        a2, b2 = max(1, a), min(n, b)
+        if b2 < a2:
+            continue
+        # bounded DURING the render (gate round gate_20261008-131032, MEDIUM): a
+        # class-spanning hunk on a huge file must never materialize every line
+        # before the cap slices it
+        for i in range(a2, b2 + 1):
+            piece = "%d: %s\n" % (i, lines[i - 1])
+            if size + len(piece) > _SCOPED_WINDOW_MAX:
+                rendered.append("...window truncated at the %d-byte cap...\n"
+                                % _SCOPED_WINDOW_MAX)
+                size += 10 ** 12
+                break
+            rendered.append(piece)
+            size += len(piece)
+        if size >= _SCOPED_WINDOW_MAX:
+            break
+    body = "".join(rendered)
+    if not body:
+        return ""
+    return ("\nSCOPED WINDOW for STAGED FILE %s (oversize: %d bytes - enclosing "
+            "symbols of the diff hunks; full body omitted for size):\n%s\n"
+            % (path, len(blob), body))
+
+
+def _warn_proven_low(text, files):
+    """The single proven-LOW authority for WARN verdicts (gate rounds
+    gate_20261008-133828/150151: three inline copies diverged twice - F8, F17).
+    True iff the parsed findings exist AND every one is PROVEN LOW; anything
+    unproven (including no-severity rows) denies."""
+    findings = _parse_findings(text, files)
+    return bool(findings) and all(s == "LOW" for s, _cited in findings)
+
+
 def _compose_review_payload(diff, blobs, context):
     """Assemble the reviewer's user message STABLE-FIRST/DIFF-LAST (cache-
     efficiency tranche R1, owner order 2026-09-23). `blobs` is [(path, bytes)]
@@ -1662,12 +2764,31 @@ def _compose_review_payload(diff, blobs, context):
     for f, blob in blobs:
         nbytes = len(blob)
         if nbytes > MAX_FILE_BYTES or total + nbytes > MAX_TOTAL_BYTES:
+            # G-B (owner order 2026-10-08): a bounded enclosing-symbol window beats a
+            # bare omission - the reviewer sees the hunks' real context. The legacy
+            # omission note survives only when even the window cannot fit the budget.
+            window = _scoped_window(f, blob, diff)
+            if window and total + len(window.encode("utf-8")) <= MAX_TOTAL_BYTES:
+                emitted.append(window)
+                total += len(window.encode("utf-8"))
+                continue
             emitted.append("\nFULL STAGED FILE %s: OMITTED FOR SIZE (%d bytes) - judge "
                            "from the diff hunks and their context.\n" % (f, nbytes))
             continue
         emitted.append("\nFULL STAGED FILE %s:\n%s\n" % (f, blob.decode("utf-8", "replace")))
         total += nbytes
     parts = emitted + ["STAGED DIFF (the change under adversarial review):\n" + diff]
+    # Experiment #10 transfer (owner order 2026-10-10): deterministic semantic
+    # deltas ride AFTER the diff - the cacheable stable prefix is untouched, and
+    # a diff with no operator/guard pair changes leaves the payload identical.
+    try:
+        import finding_adjudicator
+        delta_block = finding_adjudicator.payload_section(
+            finding_adjudicator.semantic_deltas(diff))
+    except Exception:
+        delta_block = ""
+    if delta_block:
+        parts.append(delta_block)
     if context:
         parts.append("\nREBUTTAL / AUTHOR NOTES (verify, do not blindly trust):\n" + context + "\n")
     return "".join(parts)
@@ -1686,6 +2807,22 @@ def _cmd_run_snapshot(model, context):
         _print_secret_warning(secret_hits, sys.stdout, "review-time pattern floor")
     files = _staged_code_files()
     removals = _staged_removals()
+    runtime_catalog = ()
+    try:
+        from enforcement_runtime import ROOT as tools_origin, CERTIFIED_CATALOG as installed_catalog
+        if str(tools_origin).lower().replace("\\", "/") == root.lower().replace("\\", "/"):
+            if any(name in installed_catalog for name in files + [k[2:] for k in removals]):
+                runtime_catalog = installed_catalog
+                indexed = {os.fsdecode(name) for name in
+                           _run_git(["ls-files", "--cached", "-z"], binary=True).split(b"\0") if name}
+                missing = sorted(set(runtime_catalog) - indexed)
+                if missing:
+                    print("ADVERSARY GATE: required runtime catalog paths missing from the index: " +
+                          ", ".join(missing) + "; update the catalog for coordinated retirement or restore them; no clearance written")
+                    return 1
+                files = sorted(set(files) | set(runtime_catalog))
+    except ImportError:
+        pass  # Legacy distributed gate copies have no runtime installer.
     if not files and not removals:
         print("adversary gate: no staged code files - nothing to review.")
         return 0
@@ -1702,10 +2839,33 @@ def _cmd_run_snapshot(model, context):
                    for f in files + [k[2:] for k in removals])):
         print("adversary gate: binary code cannot be reviewed; no clearance written.")
         return 1
+    # G-A (owner order 2026-10-08): $0 deterministic pre-gate - compile/parse failures
+    # the paid reviewer would only rediscover are refused BEFORE any model call.
+    # Staged blobs are fetched ONCE here and reused by the pre-gate, tier eligibility
+    # and the payload composer (the composer keeps its running-total budget
+    # semantics over the same list).
+    blobs = [(f, _run_git(["show", ":" + f], binary=True)) for f in files]
+    pregate_fails = _local_pregate(files, blobs, root)
+    if pregate_fails:
+        print("ADVERSARY GATE: local pre-gate REFUSED - deterministic error(s) the paid "
+              "reviewer would only rediscover; fix and re-stage:")
+        for line in pregate_fails:
+            print("  " + line)
+        return 1
+    pbt_fail = _pbt_pregate(files)
+    if pbt_fail:
+        print("ADVERSARY GATE: property battery REFUSED - a stated invariant is "
+              "violated (a property failure is a real violation by construction):")
+        print("  " + pbt_fail)
+        return 1
     code_paths = files + [k[2:] for k in removals]   # code files + removed code (D:oldpath)
     diff = _diff_paths(["-c", "core.quotepath=false", "diff", "--text", "--cached", "--unified=8"],
                        code_paths)   # docs excluded (doctrine); root-anchored + argv-batched
-    blobs = ((f, _run_git(["show", ":" + f], binary=True)) for f in files)
+    if runtime_catalog:
+        sizes = {f: len(_run_git(["show", ":" + f], binary=True)) for f in files}
+        if any(sizes[f] > MAX_FILE_BYTES for f in runtime_catalog) or sum(sizes.values()) + len(diff.encode("utf-8")) > MAX_TOTAL_BYTES:
+            print("ADVERSARY GATE: full runtime catalog cannot fit the review budget; no clearance written")
+            return 1
     payload = _compose_review_payload(diff, blobs, context)
     # LOCAL SCRUB of the EXACT payload about to be transmitted (owner ruling 2026-09-07): a
     # secret in a REMOVED line, a diff hunk, an oversized-omitted file's hunk or the author's
@@ -1732,59 +2892,131 @@ def _cmd_run_snapshot(model, context):
                    "value, a test fixture built to that shape, or a false positive. Judge the "
                    "surrounding code as if a value of that shape were there; never treat a "
                    "tag as a missing or malformed value.\n\n" % len(scrubbed)) + payload
-    model, routing_why = _route_chain(model, payload, context)
-    if routing_why in ("rule", "jev"):
-        print("adversary gate: workload routing -> %s first (why=%s, payload=%d chars) "
-              "[the deepseek pins read provider prompt-cache at real size; the large or "
-              "repeating prefix rides them cheaply]"
-              % (_split_entry(model.split(",")[0])[0], routing_why, len(payload)))
-    text, usage, model, provider = _call_model_ex(model, payload)
-    if not text.rstrip().splitlines():        # adversary finding (birth review): an
-        text = "(model returned no content - failing closed)\nVERDICT: BLOCK"
-        # substituted BEFORE the artifact write so the on-disk round carries the
-        # fail-closed verdict - else it is invisible to true-rate adjudication
-    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    # Owner order 2026-09-21 (true-rate recording): the artifact name and its
-    # staged-shas/rebuttal sidecar row are allocated ATOMICALLY - same-second runs
-    # must never cross-pair names, review text and baselines.
-    try:
-        art = _write_review_round(root, ts,
-                                  _review_header(model, usage, provider,
-                                                 len(scrubbed), files) + text,
-                                  dict({f: _staged_sha(f) for f in files}, **removals),
-                                  bool(context.strip()))
-    except _ReviewRoundPartial as exc:
-        art = exc.art                             # OUR suffixed artifact - pair with
-        print("adversary gate: review-round sidecar NOT stamped (%s) - this "   # IT,
-              "round's findings will classify as indeterminate at notarization."
-              % str(exc)[:120])
-    except Exception as exc:
-        # No durable artifact means no clearance. Never allocate an unlocked
-        # fallback name: concurrent reviewers could overwrite each other's proof.
-        print("adversary gate: cannot persist review evidence (%s); no clearance written."
-              % str(exc)[:120])
-        return 1
-    verdict = "CLEAR" if _review_outcome(text) == "CLEAR" else "BLOCK"
+    # --- tiered review (owner order 2026-10-08): quick rung first when eligible ---
+    def _staged_keys():
+        return dict({f: _staged_sha(f) for f in files}, **removals)
+
+    def artifact_round(mdl, usg, prv, body_text):
+        """One durable review round (atomic name + sidecar, owner order 2026-09-21);
+        returns (artifact, ts). A total persistence failure raises to the caller."""
+        ts_r = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        try:
+            return _write_review_round(root, ts_r,
+                                       _review_header(mdl, usg, prv,
+                                                      len(scrubbed), files) + body_text,
+                                       _staged_keys(), bool(context.strip()),
+                                       tier=tier, tier_reason=tier_reason), ts_r
+        except _ReviewRoundPartial as exc:
+            print("adversary gate: review-round sidecar NOT stamped (%s) - this "
+                  "round's findings will classify as indeterminate at notarization."
+                  % str(exc)[:120])
+            return exc.art, ts_r
+
+    tier1_chain, tier2_chain = _tier_split(model)
+    art = clear_ts = None
+    tier = 2
+    text = usage = used_model = provider = None
+    tier_reason = "tier-2 (manual or ineligible)"
+    if tier1_chain and _tier1_eligible(payload, files, removals, context, blobs):
+        tier = 1
+        tier_reason = "tier-1 eligible (payload < %d, no rebuttal/removals/gated/oversize)" % TIER1_MAX_CHARS
+        print("adversary gate: tier-1 quick review (payload %d chars < %d)."
+              % (len(payload), TIER1_MAX_CHARS))
+        try:
+            text, usage, used_model, provider = _call_model_ex(
+                ",".join(tier1_chain), payload, TIER1_TIMEOUT_S)
+        except SystemExit as exc:
+            print("adversary gate: tier-1 reviewer unavailable (%s) - escalating to "
+                  "the strong rung; a dead rung never clears." % str(exc)[:180])
+            text = None
+            tier = 2
+            tier_reason = "tier-1 dead rung -> tier-2"
+        if text is not None:
+            if not text.rstrip().splitlines():
+                text = "(model returned no content - failing closed)\nVERDICT: BLOCK"
+            try:
+                art, clear_ts = artifact_round(used_model, usage, provider, text)
+            except Exception as exc:
+                # No durable artifact means no clearance. Never allocate an unlocked
+                # fallback name: concurrent reviewers could overwrite each other's proof.
+                print("adversary gate: cannot persist review evidence (%s); no clearance written."
+                      % str(exc)[:120])
+                return 1
+            if _review_outcome(text) != "CLEAR":
+                # One-directional escalation (owner order 2026-10-08): the tier-1
+                # round stays in the ledger; the strong rung confirms BLIND and its
+                # verdict is final. Tier-1 never authors a standalone refusal.
+                print("adversary gate: tier-1 flagged the change - confirming blind on "
+                      "the strong rung (the strong verdict is final).")
+                art = clear_ts = None
+                text = usage = used_model = provider = None
+                tier = 2
+                tier_reason = "tier-1 flag -> tier-2 blind confirm"
+    if tier == 2:
+        route, routing_why = _route_chain(",".join(tier2_chain) if tier2_chain else model,
+                                          payload, context)
+        if routing_why in ("rule", "jev"):
+            print("adversary gate: workload routing -> %s first (why=%s, payload=%d chars) "
+                  "[the deepseek pins read provider prompt-cache at real size; the large or "
+                  "repeating prefix rides them cheaply]"
+                  % (_split_entry(route.split(",")[0])[0], routing_why, len(payload)))
+        text, usage, used_model, provider = _call_model_ex(
+            route, payload, TIER2_TIMEOUT_S)
+        if not text.rstrip().splitlines():        # adversary finding (birth review): an
+            text = "(model returned no content - failing closed)\nVERDICT: BLOCK"
+            # substituted BEFORE the artifact write so the on-disk round carries the
+            # fail-closed verdict - else it is invisible to true-rate adjudication
+        try:
+            art, clear_ts = artifact_round(used_model, usage, provider, text)
+        except Exception as exc:
+            print("adversary gate: cannot persist review evidence (%s); no clearance written."
+                  % str(exc)[:120])
+            return 1
+    # G-E (owner order 2026-10-08): WARN authorizes ONLY a LOW-only finding set;
+    # anything else wearing WARN collapses to BLOCK (fail-closed, never looser).
+    outcome = _review_outcome(text)
+    if outcome == "WARN":
+        # G-E (owner order 2026-10-08): WARN authorizes ONLY a LOW-only finding set;
+        # anything else wearing WARN collapses to BLOCK (fail-closed, never looser).
+        if (os.environ.get("ADVERSARY_WARN_OFF", "0") == "1"
+                or not _warn_proven_low(text, files + [k[2:] for k in removals])):
+            outcome = "BLOCK"
+    staged_keys_now = _staged_keys()
+    _cache_drift_alarm(root, staged_keys_now, usage)
+    verdict = outcome if outcome in ("CLEAR", "WARN") else "BLOCK"
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
     print(text)
-    print("\n=== adversary gate: %s | artifact: %s" % (verdict, art))
-    if verdict != "CLEAR":
+    print("\n=== adversary gate: %s | tier %d | artifact: %s" % (verdict, tier, art))
+    if verdict == "BLOCK":
+        _print_finding_adjudication(root, art, text, files, blobs, diff)
         print("Address the findings (or re-run with --context carrying a factual rebuttal).")
         return 1
     clear = _load_clear(root)
     for f in files:
-        clear[f] = {"sha": _staged_sha(f), "verdict": "CLEAR", "when": ts,
-                    "model": model, "artifact": os.path.relpath(art, root)}
+        clear[f] = {"sha": _staged_sha(f), "verdict": verdict, "when": clear_ts,
+                    "epoch": _current_rules_epoch(root),
+                    "model": used_model, "artifact": os.path.relpath(art, root),
+                    "tier": tier}
     for key, sha in removals.items():
-        clear[key] = {"sha": sha, "verdict": "CLEAR", "when": ts,
-                      "model": model, "artifact": os.path.relpath(art, root)}
+        clear[key] = {"sha": sha, "verdict": verdict, "when": clear_ts,
+                      "epoch": _current_rules_epoch(root),
+                      "model": used_model, "artifact": os.path.relpath(art, root),
+                      "tier": tier}
     _save_clear(root, clear)
-    files = files + sorted(removals)
+    files_out = files + sorted(removals)
     print("Clearance written for %d file(s) - commit will pass while the staged bytes "
-          "stay identical." % len(files))
+          "stay identical." % len(files_out))
+    if tier == 1 and AUDIT_PCT > 0:
+        tree_sha = _run_git(["write-tree"]).strip()
+        if _audit_sampled(tree_sha):
+            qname = _enqueue_audit(root, tree_sha, payload, files, art)
+            print("adversary gate: tier-1 %s selected for the sampled batch audit "
+                  "(%d%% of tree/day hashes) - queued as %s; post-hoc, never "
+                  "commit-blocking." % (verdict, AUDIT_PCT, qname))
+            _spawn_audit_drain(root)
     return 0
 
 
@@ -1799,6 +3031,7 @@ def _changed_code_in_commit(rev):
     twin of _staged_code_files/_staged_removals - what a note must vouch for."""
     base = rev + "^1" if _git_ok(["rev-parse", "--verify", "--quiet", rev + "^1"]) else EMPTY_TREE
     hn = _hook_names_apply(rev)
+    text_files = _text_files_apply(rev)
     out = _run_git(["diff", "--name-status", "-M", "-z", base, rev])
     toks = out.split("\0")
     files, removals = {}, {}
@@ -1809,22 +3042,26 @@ def _changed_code_in_commit(rev):
             i += 1
             continue
         code = st[0]
-        if code in ("A", "C", "M", "T"):
+        if code in ("A", "M", "T"):
             path = toks[i + 1]
             i += 2
-            if _is_code(path, hn):
+            if _is_code(path, hn, text_files):
                 files[path] = _blob_sha(rev, path)
-        elif code == "R":
+        elif code in ("R", "C"):
+            # gate round gate_20261009-145647: C (copy) records carry TWO paths
+            # exactly like R (C<score>\0SRC\0DST) - walking C in the single-path
+            # branch consumed only SRC and desynchronized the record stream. A
+            # copy never removes its source, so only R contributes a removal.
             old, new = toks[i + 1], toks[i + 2]
             i += 3
-            if _is_code(new, hn):
+            if _is_code(new, hn, text_files):
                 files[new] = _blob_sha(rev, new)
-            if _is_code(old, hn) and not _is_code(new, hn):
+            if code == "R" and _is_code(old, hn, text_files) and not _is_code(new, hn, text_files):
                 removals["D:" + old] = _blob_sha(base, old)
         elif code == "D":
             old = toks[i + 1]
             i += 2
-            if _is_code(old, hn):
+            if _is_code(old, hn, text_files):
                 removals["D:" + old] = _blob_sha(base, old)
         else:
             i += 2
@@ -1959,6 +3196,7 @@ def _push_secret_audit(revs, doc_revs=None):
             continue
         base = rev + "^1" if _git_ok(["rev-parse", "--verify", "--quiet", rev + "^1"]) else EMPTY_TREE
         hn = _hook_names_apply(rev)
+        text_files = _text_files_apply(rev)
         try:
             added = _diff_added_lines(base, rev)
         except SystemExit:
@@ -1972,7 +3210,8 @@ def _push_secret_audit(revs, doc_revs=None):
                 else:
                     (hard if _hard_label(label) else soft).append((rev[:12], path, ln, label))
                 break
-            if not _is_code(path, hn) and (doc_set is None or rev in doc_set):
+            if (not _is_code(path, hn, text_files) or os.path.splitext(path)[1].lower() in DOCSCAN_EXTS) \
+                    and (doc_set is None or rev in doc_set):
                 key = (rev, path)
                 if key not in binary_paths:
                     binary_paths[key] = _blob_is_binary(rev, path)
@@ -2015,7 +3254,8 @@ def _push_secret_barrier(lref, revs, anchors, remote_known, doc_revs=None):
         return 1
     if doc_text.strip():
         try:
-            res = (docscan.scan(doc_text) if docscan
+            res = (docscan.scan_segmented(
+                doc_text, max_chunks=_env_int("ADVERSARY_DOCSCAN_PUSH_CHUNKS", 96)) if docscan
                    else {"status": "degraded", "detail": "docscan module unavailable"})
         except (Exception, SystemExit) as e:
             res = {"status": "degraded", "detail": "docs scan crashed: %s" % (str(e)[:150])}
@@ -2055,7 +3295,9 @@ def _adv_lock(adv, name, deadline_s=10):
                 # ownership re-check: on POSIX a racing stale-breaker can unlink and
                 # re-create the lock between our create and this read - if the file
                 # at the path is not ours, we do NOT hold the lock (r6 F3)
-                if open(lock, encoding="utf-8", errors="replace").read().strip() != mine:
+                with open(lock, encoding="utf-8", errors="replace") as stream:
+                    owner = stream.read().strip()
+                if owner != mine:
                     os.close(fd)
                     continue
             except OSError:
@@ -2075,14 +3317,15 @@ def _adv_unlock(adv, name, fd):
         pass
     lock = os.path.join(adv, name + ".lock")
     try:
-        if (open(lock, encoding="utf-8", errors="replace").read().strip()
-                == str(os.getpid())):
+        with open(lock, encoding="utf-8", errors="replace") as stream:
+            owner = stream.read().strip()
+        if owner == str(os.getpid()):
             os.remove(lock)                   # only OUR lock - never a successor's
     except OSError:
         pass
 
 
-def _stamp_review_meta(root, art_name, staged, context_used):
+def _stamp_review_meta(root, art_name, staged, context_used, **extra):
     """Owner order 2026-09-21 (true-rate recording): every review round records the
     staged blob shas it judged (same key space as clearance/changed: paths + 'D:' keys)
     plus whether the author carried a --context REBUTTAL. Append-merge under the
@@ -2100,7 +3343,8 @@ def _stamp_review_meta(root, art_name, staged, context_used):
                 data = json.loads(open(p, encoding="utf-8").read())
             except ValueError:
                 raise RuntimeError("Corrupt evidence JSON; original preserved") from None
-        data[art_name] = {"staged": staged, "rebuttal": bool(context_used)}
+        data[art_name] = dict({"staged": staged, "rebuttal": bool(context_used)},
+                               **extra)   # T2.3 tier/tier_reason telemetry
         tmp = p + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
@@ -2119,7 +3363,8 @@ class _ReviewRoundPartial(RuntimeError):
         self.art = art
 
 
-def _write_review_round(root, ts, body, staged, context_used):
+def _write_review_round(root, ts, body, staged, context_used,
+                       tier=None, tier_reason=None):
     """Allocate the round's ARTIFACT NAME and its sidecar row atomically under the
     reviews lock (gate round 4, 2026-09-21): two runs ending in the same second must
     never share a gate_<ts>.md name - the second write would clobber the first's
@@ -2148,7 +3393,7 @@ def _write_review_round(root, ts, body, staged, context_used):
                     data = json.loads(open(p, encoding="utf-8").read())
                 except ValueError:
                     raise RuntimeError("Corrupt evidence JSON; original preserved") from None
-            data[name] = {"staged": staged, "rebuttal": bool(context_used)}
+            data[name] = dict({"staged": staged, "rebuttal": bool(context_used)}, tier=tier, tier_reason=tier_reason)
             tmp = p + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=1)
@@ -2194,6 +3439,31 @@ def _parse_findings(text, files):
 
 
 _GNAME_RE = re.compile(r"gate_(\d{8}-\d{6})(?:-(\d+))?\.md$")
+
+
+def _print_finding_adjudication(root, art, text, files, blobs, diff):
+    """Experiment #10 transfer (owner order 2026-10-10): anchor-normalize the
+    findings of a BLOCK review and persist the dispositions as evidence. The
+    external reviewer's verdict stays the commit authority - this layer
+    ANNOTATES, never rules (measured basis and the one-line upgrade path live
+    in finding_adjudicator's module docstring; ADVERSARY_ADJUDICATE_OFF=1
+    skips it entirely)."""
+    if os.environ.get("ADVERSARY_ADJUDICATE_OFF", "0") == "1":
+        return
+    try:
+        import finding_adjudicator
+        res = finding_adjudicator.adjudicate_review(text, files, blobs, diff)
+        res["artifact"] = os.path.relpath(art, root) if art else None
+        res["verdict"] = "BLOCK"
+        try:
+            _save_json(root, "adjudication_%s"
+                       % datetime.datetime.now().strftime("%Y%m%d-%H%M%S"), res)
+        except Exception:
+            pass                      # console annotation survives; persistence is best-effort
+        print("\n=== " + finding_adjudicator.summary_line(res))
+    except Exception as exc:
+        print("adversary gate: finding adjudication skipped (%s) - evidence-only "
+              "layer, never verdict-affecting." % str(exc)[:120])
 
 
 def _adjudicate_cycle(root, head, changed, clear, note_type, after=None):
@@ -2260,8 +3530,15 @@ def _adjudicate_cycle(root, head, changed, clear, note_type, after=None):
         # (_review_outcome) - a lowercase 'verdict: block' or spaced 'VERDICT : X'
         # was a real failed round to the gate and must be one here too (r7 F1)
         outcome = _review_outcome(text)
-        verdict = ("CLEAR" if outcome == "CLEAR" else
-                   "BLOCK" if outcome in ("BLOCK", "malformed") else None)
+        # WARN rounds classify by their own severities (gate round
+        # gate_20261008-131032, MEDIUM): LOW-only WARN stood as a clearance;
+        # anything heavier was collapsed to BLOCK by the run path and denied.
+        if outcome == "WARN":
+            # single authority (F8/F17 divergence class): same helper as the run path
+            verdict = "CLEAR" if _warn_proven_low(text, files) else "BLOCK"
+        else:
+            verdict = ("CLEAR" if outcome == "CLEAR" else
+                       "BLOCK" if outcome in ("BLOCK", "malformed") else None)
         # header_listed separates a REAL empty list (a removals-only round) from a
         # parse miss (no files: header at all) - the latter must adopt nothing (r5 F5)
         rounds.append((rkey, name, verdict, files, text, m is not None))
@@ -2382,7 +3659,13 @@ def _append_adjudication(root, episode):
                 data = json.loads(open(p, encoding="utf-8").read())
             except ValueError:
                 raise RuntimeError("Corrupt evidence JSON; original preserved") from None
-        if not any(ep.get("commit") == episode.get("commit")
+        # T6/W2 (gate round gate_20261009-121201): pre-write episodes carry NO
+        # commit - the old equality dedup collapsed them all into one (both sides
+        # None). Dedup key: commit when present, else the caller's identity tuple.
+        def _ep_key(ep):
+            return (ep.get("commit") or
+                    ("pre-write", ep.get("path"), ep.get("artifact")))
+        if not any(_ep_key(ep) == _ep_key(episode)
                    for ep in data.get("episodes", [])):
             data.setdefault("episodes", []).append(episode)
             tmp = p + ".tmp"
@@ -2428,6 +3711,51 @@ def _cycle_floor(head, ref):
         return None
 
 
+_REFS_CAPABLE = None
+
+
+def _refs_capable():
+    """True when this git has the `git refs` subcommand (2.54+; adopted by
+    owner order 2026-10-10). Probed with a count-limited empty listing: older
+    gits exit nonzero on the unknown subcommand, capable gits succeed quietly
+    regardless of repository state."""
+    global _REFS_CAPABLE
+    if _REFS_CAPABLE is None:
+        _REFS_CAPABLE = _git_ok(["refs", "list", "--count=0"])
+    return _REFS_CAPABLE
+
+
+def _refs_head(ref):
+    """The ref's current object id via `git refs` (exact-refname match from
+    `refs list`), or None when absent. Older gits fall back to a read-only
+    rev-parse probe."""
+    if _refs_capable():
+        if not _git_ok(["refs", "exists", ref]):
+            return None
+        out = _run_git(["refs", "list", "--format=%(refname) %(objectname)", ref])
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0] == ref:
+                return parts[1]
+        return None
+    if not _git_ok(["rev-parse", "--verify", "--quiet", ref]):
+        return None
+    return _run_git(["rev-parse", ref]).strip()
+
+
+def _chain_predecessor_digest(head, ref):
+    """sha256 of the chain predecessor's note bytes - the SAME mac-carrying
+    ancestor `_chain_predecessor_commit` selects (git-log order over all
+    ancestors, HEAD excluded; a merge may bind through its second parent) -
+    or None when the chain is at GENESIS. The notarization window guard
+    compares this before and after the write."""
+    c = _chain_predecessor_commit(head, ref)
+    if c is None:
+        return None
+    return hashlib.sha256(_run_git(["notes", "--ref", ref, "show", c],
+                                   binary=True)).hexdigest()
+
+
 def cmd_record(ref):
     """Post-commit NOTARIZATION (fail-closed): write a durable git note for HEAD only when
     every changed code blob matches a fresh CLEAR row (or a provenance-matched OVERRIDE).
@@ -2465,9 +3793,11 @@ def cmd_record(ref):
             sys.stderr.write("adversary record: override_used.json does not match HEAD's "
                              "blobs - discarded (a stale override cannot bless this commit).\n")
     if note is None:
+        _epoch_now = _current_rules_epoch(root)   # H4: epoch-bound notarization
         bad = [k for k, sha in changed.items()
                if not (clear.get(k) and clear[k].get("sha") == sha
-                       and clear[k].get("verdict") == "CLEAR")]
+                       and clear[k].get("verdict") in ("CLEAR", "WARN")
+                       and str(clear[k].get("epoch", "0")) == _epoch_now)]
         if bad:
             sys.stderr.write("adversary record: HEAD %s NOT notarized - no matching "
                              "clearance for:\n%s"
@@ -2484,9 +3814,27 @@ def cmd_record(ref):
         note = {"type": "CLEAR", "commit": head, "caller": _caller(),
                 "when": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
                 "files": {k: {"sha": changed[k], "model": clear[k].get("model"),
+                              "verdict": clear[k].get("verdict"),
                               "when": clear[k].get("when"),
                               "artifact": clear[k].get("artifact")} for k in changed},
                 "artifacts": arts}
+        try:
+            from enforcement_runtime import ROOT as tools_origin, CERTIFIED_CATALOG as installed_catalog
+            if str(tools_origin).lower().replace("\\", "/") == root.lower().replace("\\", "/"):
+                certified = {}
+                for name in installed_catalog:
+                    sha = hashlib.sha256(_run_git(["show", head + ":" + name], binary=True)).hexdigest()
+                    row = clear.get(name) or {}
+                    # Certified runtime installs demand an UNQUALIFIED CLEAR (gate
+                    # round gate_20261008-135545, MEDIUM): a WARN row never
+                    # authorizes machine-wide enforcement byte deployment.
+                    if row.get("sha") != sha or row.get("verdict") != "CLEAR":
+                        break
+                    certified[name] = {key: row.get(key) for key in ("sha", "model", "when", "artifact")}
+                if len(certified) == len(installed_catalog):
+                    note["files"].update(certified)
+        except (ImportError, SystemExit):
+            pass  # No full-catalog credit: installer will require prior exact evidence.
     # Owner order 2026-09-21 (true-rate recording): classify this commit's denial
     # cycle, embed the summary in the notary note, append the full episode after.
     # Adjudication failure must never block a notarization - it degrades loudly.
@@ -2510,11 +3858,69 @@ def cmd_record(ref):
     except (SystemExit, Exception) as exc:   # SystemExit escapes bare-Exception
         sys.stderr.write("adversary record: adjudication skipped (%s) - the notarization "
                          "stands, the episode is NOT recorded.\n" % str(exc)[:120])
+    # T3.3 / H1 (owner ruling D1): the embedded artifacts must hash to the bytes on
+    # disk (a forged/tampered .adversary/reviews file cannot bless a commit),
+    # and the note carries an HMAC over its canonical body chained to the
+    # prior notarized note - the auditor verifies both.
+    key, key_created = _note_hmac_key(root)
+    if "artifacts" in note:
+        arts_sha = {}
+        for rel, embedded in list(note["artifacts"].items()):
+            disk_p = os.path.join(root, rel.replace("/", os.sep))
+            # text-mode reads on BOTH sides: the artifact was written through
+            # Windows text mode (CRLF on disk, LF in the embedded str) - compare
+            # like-for-like content, not newline identity
+            disk_s = (open(disk_p, encoding="utf-8", errors="replace").read()[:100_000]
+                      if os.path.isfile(disk_p) else "")
+            emb_sha = hashlib.sha256(embedded.encode("utf-8", "replace")).hexdigest()
+            disk_sha = hashlib.sha256(disk_s.encode("utf-8", "replace")).hexdigest()
+            arts_sha[rel] = {"embedded": emb_sha, "disk": disk_sha}
+            if emb_sha != disk_sha:
+                sys.stderr.write("adversary record: artifact %s does not match the bytes on disk -"
+                                 " tampered or forged evidence; NOT notarizing.%s" % (rel, "\n"))
+                return 1
+        note["artifacts_sha256"] = arts_sha
+    note.pop("_prior_mac", None)
+    note["mac_key_created"] = key_created   # INSIDE the mac body (gate catch:
+    # any field added after the mac changes the hashed body - the auditor
+    # recomputes over the full note minus mac)
+    # T1 (owner order 2026-10-10, git 2.56 adoption): guard the notarization
+    # window. The HMAC binds to the note of the most recent mac-carrying
+    # ANCESTOR (git-log order - for merges that may be the second parent); a
+    # concurrent writer REPLACING that note between our read and our write
+    # would chain this note to stale bytes the auditor will flag. Sibling
+    # notaries (notes for other commits) are legitimate and tolerated - the
+    # invariant is the predecessor's bytes, not the ref tip. Capture the
+    # predecessor digest and the ref value first; after the write verify the
+    # ref moved, the predecessor is untouched, and our note is readable. On
+    # any mismatch, remove our note and fail closed (re-run record to retry).
+    notes_old = _refs_head(ref)
+    prior_digest = _chain_predecessor_digest(head, ref)
+    note["mac"] = _chain_mac(key, note, _prior_note_mac(root, head, ref))
     tmp = os.path.join(_adv_dir(root), "note.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(note, f, indent=1)
     _run_git(["notes", "--ref", ref, "add", "-F", tmp, head])
     os.remove(tmp)
+    try:
+        # SystemExit-safe: a predecessor note that becomes unreadable inside
+        # the window surfaces as _run_git's SystemExit - that is a FAILED
+        # verification, never an escape past the cleanup (round
+        # gate_20261010-220719, LOW: the raw exit skipped note removal and a
+        # later record re-run would falsely report success).
+        ok = (_refs_head(ref) not in (None, notes_old)
+              and _chain_predecessor_digest(head, ref) == prior_digest
+              and _git_ok(["notes", "--ref", ref, "show", head]))
+    except SystemExit:
+        ok = False
+    if not ok:
+        if _git_ok(["notes", "--ref", ref, "show", head]):
+            _run_git(["notes", "--ref", ref, "remove", head])
+        sys.stderr.write("adversary record: the notarization window was raced "
+                         "(chain predecessor replaced or the note did not land) - "
+                         "our note removed, NOT notarized; re-run record once the "
+                         "concurrent writer is done.\n")
+        return 1
     print("adversary record: %s note written for %s (%d file(s))"
           % (note["type"], head[:12], len(changed)))
     if episode:
@@ -2686,13 +4092,338 @@ def cmd_check_push(remote):
     return 0
 
 
+def cmd_write_review_status(review_id):
+    """Read one sanitized review, without exposing arbitrary state or granting clearance."""
+    from pathlib import Path
+    import stat
+    if not re.fullmatch(r"[0-9a-f]{32}", review_id):
+        print("Invalid write-review identifier")
+        return 2
+    root = Path(_repo_root()).resolve(strict=True)
+    artifact = root / ".adversary" / "write-reviews" / (review_id + ".json")
+    try:
+        for path in (root / ".adversary", artifact.parent, artifact):
+            info = path.lstat()
+            if path.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+                raise ValueError("linked review path")
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 1_000_000:
+            raise ValueError("unsafe or oversized review")
+        if artifact.resolve(strict=True) != artifact.absolute():
+            raise ValueError("aliased review path")
+        with artifact.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            raw = stream.read(1_000_001)
+        after = artifact.stat()
+        def stamp(value):
+            return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_nlink)
+        if stamp(info) != stamp(opened) or stamp(info) != stamp(after) or len(raw) > 1_000_000:
+            raise ValueError("review changed during read")
+        record = json.loads(raw.decode("utf-8"))
+        result = {key: record.get(key) for key in
+                  ("path", "before_sha256", "after_sha256", "model", "outcome", "attempts", "review")}
+        def sanitize(value):
+            if isinstance(value, str):
+                # Scrub raw text before JSON escapes its line breaks/quotes. The
+                # assignment heuristic deliberately skips >4096-char segments;
+                # hide those segments rather than promising unsafe redaction.
+                bounded = "\n".join(line if len(line) <= 4096 else
+                                    "<REDACTED:oversized-line>" for line in value.split("\n"))
+                return _scrub_text(bounded)[0]
+            if isinstance(value, list):
+                return [sanitize(item) for item in value]
+            if isinstance(value, dict):
+                return {sanitize(key): sanitize(item) for key, item in value.items()}
+            return value
+        print(json.dumps(sanitize(result)))
+        return 0
+    except (OSError, ValueError, AttributeError, RecursionError) as exc:
+        category = ("filesystem error " + str(exc.errno)) if isinstance(exc, OSError) else type(exc).__name__
+        print("Write-review evidence unavailable or unsafe: " + category)
+        return 2
+
+
+def _cache_drift_alarm(root, staged_keys, usage):
+    """T2.2 (owner order 2026-10-08): round N+1 of the same landing should hit the
+    provider prompt cache; ~0 cached tokens on a big prompt with an overlapping
+    prior round means the stable prefix rotated mid-landing. One loud line."""
+    try:
+        prompt = usage.get("prompt_tokens", 0) or 0
+        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
+        if prompt < 30_000 or cached > 0:
+            return
+        adv = _adv_dir(root)
+        p = os.path.join(adv, "reviews", "staged_shas.json")
+        if not os.path.isfile(p):
+            return
+        rows = json.loads(open(p, encoding="utf-8").read())
+        for name in sorted(rows, reverse=True)[:8]:
+            prior_staged = (rows.get(name) or {}).get("staged") or {}
+            if prior_staged and set(prior_staged) & set(staged_keys):
+                art = os.path.join(adv, "reviews", name)
+                head = open(art, encoding="utf-8", errors="replace").readline()
+                # absent cached_tokens == zero (legacy headers): skip both
+                if "cached_tokens': 0" in head or "cached_tokens" not in head:
+                    continue
+                print("adversary gate: CACHE DRIFT - %d prompt tokens with 0 cached on "
+                      "a payload overlapping prior round %s: the stable prefix rotated "
+                      "(staged bytes changed mid-landing?)." % (prompt, name))
+                return
+    except Exception:
+        pass
+
+def _current_rules_epoch(root):
+    """T3.1 / hole H4 (gate top-to-bottom): the rules epoch the working tree
+    reviews under. Absent file = epoch '0' (pre-epoch repos stay armed)."""
+    p = os.path.join(root, RULES_EPOCH_FILE)
+    try:
+        val = open(p, encoding="utf-8", errors="replace").read().strip()
+        return val or "0"
+    except OSError:
+        return "0"
+
+def _note_hmac_key(root):
+    """T3.3 / hole H1: the gate-held HMAC key (owner ruling D1). Created on first
+    use: line 1 = '# created=<iso>', line 2 = 64 hex chars. Detection posture -
+    the key binds notes to this machine's gate; a human-at-shell forger without
+    the key cannot produce a chain-valid note."""
+    import secrets
+    adv = _adv_dir(root)
+    os.makedirs(adv, exist_ok=True)
+    p = os.path.join(adv, "note_hmac.key")
+    if os.path.isfile(p):
+        lines = open(p, encoding="utf-8", errors="replace").read().splitlines()
+        for ln in lines:
+            t = ln.strip()
+            if len(t) == 64 and re.fullmatch(r"[0-9a-f]{64}", t):
+                return bytes.fromhex(t), _key_created(lines)
+        raise SystemExit("ADVERSARY GATE: note_hmac.key is corrupt - refusing to "
+                         "notarize (restore the key or delete it to re-key; see "
+                         "docs/plans/2026-10-09-note-integrity-hmac.md)")
+    key = secrets.token_bytes(32)
+    created = datetime.datetime.now().isoformat(timespec="seconds")
+    with open(p, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("# created=%s\n%s\n" % (created, key.hex()))
+    try:
+        os.chmod(p, 0o600)
+    except OSError:
+        pass
+    return key, created
+
+
+def _key_created(lines):
+    for ln in lines:
+        if ln.startswith("# created="):
+            return ln.split("=", 1)[1].strip()
+    return ""
+
+
+def _chain_predecessor_commit(head, ref=NOTES_REF):
+    """The most recent ANCESTOR commit whose note carries a mac - the chain
+    link target _prior_note_mac binds the HMAC to. Selected by `git log`
+    order over ALL ancestors (for a merge this can be the second parent or an
+    earlier ancestor when the first parent carries no mac); HEAD itself is
+    excluded - the chain points BACKWARD from each new note."""
+    commits = _run_git(["log", "--format=%H", head]).split()
+    for c in commits[1:]:
+        if not _git_ok(["notes", "--ref", ref, "show", c]):
+            continue
+        try:
+            prior = json.loads(_run_git(["notes", "--ref", ref, "show", c]))
+        except ValueError:
+            continue
+        if prior.get("mac"):
+            return c
+    return None
+
+
+def _prior_note_mac(root, head, ref=NOTES_REF):
+    """The most recent ANCESTOR commit's note mac (chain link); GENESIS when none.
+    HEAD itself is excluded - the chain points BACKWARD from each new note."""
+    c = _chain_predecessor_commit(head, ref)
+    if c is None:
+        return "GENESIS"
+    return json.loads(_run_git(["notes", "--ref", ref, "show", c]))["mac"]
+
+
+def _chain_mac(key, note, prior):
+    import hmac as _h
+    body = dict(note)
+    body.pop("mac", None)
+    payload = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    return _h.new(key, (payload + "|" + str(prior)).encode("utf-8"),
+                  "sha256").hexdigest()
+
+_DOCSCAN_CACHE_MAX = 500
+
+
+def _docscan_cache_lookup(root, text):
+    """T4.4: return a cached CLEAR result dict, or None. Key axis = model
+    fingerprint + rules epoch + sha256(text); any mismatch drops the file."""
+    try:
+        import hashlib as _hl
+        p = os.path.join(_adv_dir(root), "docscan_cache.json")
+        if not os.path.isfile(p):
+            return None
+        d = json.loads(open(p, encoding="utf-8").read())
+        fp = docscan.model_fingerprint() if docscan else "no-module"
+        if (d.get("model") != fp
+                or str(d.get("epoch")) != str(_current_rules_epoch(root))):
+            return None
+        row = (d.get("entries") or {}).get(_hl.sha256(
+            text.encode("utf-8", "replace")).hexdigest())
+        if row and row.get("status") == "clear":
+            return {"status": "clear",
+                    "detail": "cached: " + str(row.get("detail", ""))[:120],
+                    "chunks": row.get("chunks", 0), "capped": row.get("capped", False)}
+        return None
+    except (OSError, ValueError):
+        return None
+
+
+def _docscan_cache_store(root, text, res):
+    """T4.4: persist a CLEAR verdict (block/degraded are never cached)."""
+    if not res or res.get("status") != "clear":
+        return
+    try:
+        import hashlib as _hl
+        adv = _adv_dir(root)
+        os.makedirs(adv, exist_ok=True)
+        fd = _adv_lock(adv, "docscan_cache", deadline_s=2)
+        if fd is None:
+            return
+        try:
+            p = os.path.join(adv, "docscan_cache.json")
+            d = {}
+            if os.path.isfile(p):
+                try:
+                    d = json.loads(open(p, encoding="utf-8").read())
+                except ValueError:
+                    d = {}
+            fp = docscan.model_fingerprint() if docscan else "no-module"
+            if (d.get("model") != fp
+                    or str(d.get("epoch")) != str(_current_rules_epoch(root))):
+                d = {"model": fp, "epoch": str(_current_rules_epoch(root)),
+                     "entries": {}}
+            d.setdefault("entries", {})[_hl.sha256(
+                text.encode("utf-8", "replace")).hexdigest()] = {
+                "status": "clear", "chunks": res.get("chunks", 0),
+                "capped": bool(res.get("capped")),
+                "detail": str(res.get("detail", ""))[:160],
+                "when": datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}
+            d["entries"] = dict(list(d["entries"].items())[-_DOCSCAN_CACHE_MAX:])
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(d, fh, indent=1)
+            os.replace(tmp, p)
+        finally:
+            _adv_unlock(adv, "docscan_cache", fd)
+    except Exception:
+        pass
+
+
+def cmd_explain(path):
+    """T5a (owner order 2026-10-09): why is this file unreviewed/stale? One command
+    prints the clearance row (sha match vs staged, verdict, tier, epoch vs current,
+    model, artifact) and the artifact's findings head - no more hand-reading
+    clearance.json and matching artifacts by eye."""
+    root = _repo_root()
+    clear = _load_clear(root)
+    row = clear.get(path)
+    print(path)
+    if not row:
+        print("  no clearance row - unreviewed (run: python adversary_gate.py run)")
+        return 0
+    staged = None
+    try:
+        staged = _staged_sha(path)
+    except BaseException:            # _run_git raises SystemExit (a BaseException)
+        staged = None                # for unstaged paths - that is an ANSWER, not a crash
+    epoch_now = _current_rules_epoch(root)
+    sha_state = ("(matches staged)" if staged is not None and row.get("sha") == staged
+                 else "(STALE - staged bytes differ or file not staged)")
+    print("  verdict: %s | tier: %s | epoch: %s%s"
+          % (row.get("verdict"), row.get("tier", "n/a"), row.get("epoch", "0"),
+             "" if str(row.get("epoch", "0")) == epoch_now
+             else " (CURRENT %s - stale, re-review needed)" % epoch_now))
+    print("  sha: %s %s" % (str(row.get("sha", ""))[:16], sha_state))
+    print("  model: %s | reviewed: %s" % (row.get("model"), row.get("when")))
+    art = row.get("artifact")
+    if art:
+        p = os.path.join(root, str(art))
+        present = os.path.isfile(p)
+        print("  artifact: %s (%s)" % (art, "present" if present else "MISSING"))
+        if present:
+            head = open(p, encoding="utf-8", errors="replace").read(800)
+            for line in head.splitlines()[:6]:
+                print("    | " + line[:140])
+    return 0
+
+
+def cmd_costs(days=30):
+    """T2.1 (owner order 2026-10-08): aggregate the usage blocks already stamped
+    in every review artifact header into the re-pinning table: model, rounds,
+    tokens, cached share, cost. Read-only; unknown/legacy headers degrade to a
+    counted 'unparsed' row, never a crash."""
+    import datetime as _dt
+    root = _repo_root()
+    rvw = os.path.join(_adv_dir(root), "reviews")
+    if not os.path.isdir(rvw):
+        print("adversary costs: no review artifacts.")
+        return 0
+    cutoff = _dt.datetime.now() - _dt.timedelta(days=days)
+    rows = {}
+    unparsed = 0
+    for name in sorted(os.listdir(rvw)):
+        if not (name.startswith("gate_") and name.endswith(".md")):
+            continue
+        p = os.path.join(rvw, name)
+        try:
+            if _dt.datetime.fromtimestamp(os.path.getmtime(p)) < cutoff:
+                continue
+            head = open(p, encoding="utf-8", errors="replace").readline()
+        except OSError:
+            continue
+        m = re.match(r"model: ([^ |]+) .*usage: (\{.*\}) ", head)
+        if not m:
+            unparsed += 1
+            continue
+        model = m.group(1)
+        try:
+            u = json.loads(m.group(2).replace("'", '"'))
+        except ValueError:
+            unparsed += 1
+            continue
+        r = rows.setdefault(model, {"rounds": 0, "in": 0, "cached": 0, "out": 0, "$": 0.0})
+        r["rounds"] += 1
+        r["in"] += u.get("prompt_tokens", 0)
+        r["cached"] += (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+        r["out"] += u.get("completion_tokens", 0)
+        r["$"] += float(u.get("cost", 0) or 0)
+    if not rows:
+        print("adversary costs: no parseable review headers in the last %d day(s)." % days)
+        return 0
+    print("%-46s %6s %12s %12s %10s %9s" % ("model", "rounds", "tok in", "tok cached",
+                                            "tok out", "$"))
+    total = 0.0
+    for model in sorted(rows, key=lambda k: -rows[k]["$"]):
+        r = rows[model]
+        total += r["$"]
+        print("%-46s %6d %12d %12d %10d %9.4f"
+              % (model, r["rounds"], r["in"], r["cached"], r["out"], r["$"]))
+    print("%-46s %6s %12s %12s %10s %9.4f"
+          % ("TOTAL", "", "", "", "", total))
+    if unparsed:
+        print("(%d artifact header(s) unparsed - legacy or malformed)" % unparsed)
+    return 0
+
 def cmd_status():
     root = _repo_root()
     clear = _load_clear(root)
     for f in _staged_code_files():
         sha = _staged_sha(f)
         row = clear.get(f)
-        state = ("CLEAR" if row and row.get("sha") == sha and row.get("verdict") == "CLEAR"
+        state = ("CLEAR" if row and row.get("sha") == sha
+                 and row.get("verdict") in ("CLEAR", "WARN")
                  else ("stale" if row else "unreviewed"))
         print("%-60s %s" % (f, state))
     return 0
@@ -2710,7 +4441,17 @@ def main(argv=None):
     rec.add_argument("--ref", default=NOTES_REF)
     cp = sub.add_parser("check-push")
     cp.add_argument("remote")
-    sub.add_parser("status")
+    ex = sub.add_parser("explain",
+                        help="why is one file unreviewed/stale? prints its clearance row + artifact head")
+    ex.add_argument("path")
+    costs = sub.add_parser("costs",
+                           help="aggregate review cost/usage from artifact headers")
+    costs.add_argument("--days", type=int, default=30)
+    status = sub.add_parser("status")
+    status.add_argument("--write-review", help="read one sanitized write-review by its 32-character identifier")
+    ad = sub.add_parser("audit-drain",
+                        help="drain queued tier-1 batch audits (post-hoc; never blocks commits)")
+    ad.add_argument("--limit", type=int, default=4)
     a = ap.parse_args(argv)
     if a.cmd == "check":
         return cmd_check(auto_review=True)
@@ -2722,7 +4463,13 @@ def main(argv=None):
         return cmd_record(a.ref)
     if a.cmd == "check-push":
         return cmd_check_push(a.remote)
-    return cmd_status()
+    if a.cmd == "explain":
+        return cmd_explain(a.path)
+    if a.cmd == "costs":
+        return cmd_costs(a.days)
+    if a.cmd == "audit-drain":
+        return cmd_audit_drain(a.limit)
+    return cmd_write_review_status(a.write_review) if a.write_review else cmd_status()
 
 
 if __name__ == "__main__":

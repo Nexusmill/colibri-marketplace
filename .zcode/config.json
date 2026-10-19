@@ -1,0 +1,109 @@
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "SessionStart": [
+        {
+          "hooks": [
+            {
+              "type": "process",
+              "command": "powershell.exe",
+              "enabled": true,
+              "statusMessage": "colibri-marketplace grounding: AGENTS.md snapshot + hard rules",
+              "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "C:\\Users\\User\\source\\repos\\colibri-marketplace\\zcode\\zcode_grounding.ps1"
+              ],
+              "timeoutMs": 75000
+            }
+          ]
+        }
+      ],
+      "PreToolUse": [
+        {
+          "matcher": "Read|Bash",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "powershell.exe",
+              "enabled": true,
+              "statusMessage": "G6 guard: jCodemunch-first (Read/Bash-search)",
+              "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "C:\\Users\\User\\source\\repos\\colibri-marketplace\\zcode\\zcode_jcm_guard.ps1",
+                "-SessionId",
+                "${CLAUDE_SESSION_ID}"
+              ],
+              "timeoutMs": 15000
+            }
+          ]
+        },
+      {
+          "matcher": "Write|Edit|Bash|mcp__plugin_universal-tools_universal-tools__(safe_write|safe_replace)",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "powershell.exe",
+              "enabled": true,
+              "statusMessage": "G42/G43 guards: health fail-arm + cross-repo adjustment ledger",
+              "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "C:\\Users\\User\\source\\repos\\colibri-marketplace\\zcode\\zcode_repo_guards.ps1",
+                "-SessionId",
+                "${CLAUDE_SESSION_ID}"
+              ],
+              "timeoutMs": 15000
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "mcp__(plugin_jcodemunch_jcodemunch|jcodemunch)__.*",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "powershell.exe",
+              "enabled": true,
+              "args": [
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "C:\\Users\\User\\source\\repos\\colibri-marketplace\\zcode\\zcode_jcm_mark.ps1",
+                "-SessionId",
+                "${CLAUDE_SESSION_ID}"
+              ],
+              "timeoutMs": 10000
+            }
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "process",
+              "command": "node",
+              "enabled": true,
+              "statusMessage": "G38 stop gate: unverified source edits check",
+              "args": [
+                "C:\\Users\\User\\source\\repos\\colibri-marketplace\\zcode\\zcode_stop_gate.mjs"
+              ],
+              "timeoutMs": 10000
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
