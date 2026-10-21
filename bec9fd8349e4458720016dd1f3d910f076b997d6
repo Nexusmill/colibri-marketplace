@@ -1,0 +1,26 @@
+{
+ "type": "OVERRIDE",
+ "commit": "bec9fd8349e4458720016dd1f3d910f076b997d6",
+ "when": "20261021-075950",
+ "reason": "owner override 2026-10-21: hash-verified copies of gate-cleared canonical ad6ace10",
+ "files": {
+  ".zcode/config.json": {
+   "sha": "4e127c8ce09c272bccea67cf7f7cb8150eacb0e2fa17eee21d73ed03b1fed267"
+  },
+  "tools/zcode_jcm_guard.ps1": {
+   "sha": "76966f6163a15044fa96c59b4c8dd03db0dfa60ae73fee94c3d207a8d4b4460c"
+  },
+  "tools/zcode_jcm_mark.ps1": {
+   "sha": "8f9d06d10f1a3cd33394f820e2605156981905342951503ede9940f6b477fa5c"
+  }
+ },
+ "adjudication": {
+  "denial": "reviews/gate_20261021-004202.md",
+  "outcomes": {
+   "overridden": 1
+  },
+  "detail": ".adversary/adjudications.json"
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "841a31bcb28ffd983fdc1711c564e4ec063ecbdd3f52986fe3390e93ffec16e8"
+}
