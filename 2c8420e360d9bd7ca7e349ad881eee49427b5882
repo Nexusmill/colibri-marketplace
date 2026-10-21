@@ -1,0 +1,26 @@
+{
+ "type": "CLEAR",
+ "commit": "2c8420e360d9bd7ca7e349ad881eee49427b5882",
+ "caller": "zcode",
+ "when": "20261020-212747",
+ "files": {
+  ".zcode/config.json": {
+   "sha": "811cb324711985aae331d0c8b3c473b4a1f62a2a7bb6bbaaa081393de1be7532",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "CLEAR",
+   "when": "20261020-212744",
+   "artifact": ".adversary\\reviews\\gate_20261020-212744.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261020-212744.md": "model: deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8 | provider: DeepInfra | usage: {'prompt_tokens': 2169, 'completion_tokens': 21885, 'total_tokens': 24054, 'cost': 0.00657374592, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 768, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.00657374592, 'upstream_inference_prompt_cost': 0.00013955592, 'upstream_inference_completions_cost': 0.00643419}, 'completion_tokens_details': {'reasoning_tokens': 21711, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.zcode/config.json'] | prompt: gate/adversary-review@1 (langfuse) | caller: zcode\n\nI verified the staged bytes against the diff: the JSON remains structurally valid (balanced braces/brackets, no trailing commas, no duplicate keys), the `PreToolUse`/`PostToolUse` matcher strings remain valid regexes (`Skill|mcp__(...)__.*` parses as intended alternation), and the two jcodemunch scripts (`zcode_jcm_guard.ps1`, `zcode_jcm_mark.ps1`) are relocated together while the repo-specific hooks remain in `colibri-marketplace`. The indentation change and the removed EOF newline are formatting-only. No reachable defect is demonstrated by the provided bytes; hypotheses about the moved scripts\u2019 internals or the marker-sharing with the unchanged stop gate depend on files not supplied and are therefore not reportable.\n\nVERDICT: CLEAR"
+ },
+ "artifacts_sha256": {
+  ".adversary\\reviews\\gate_20261020-212744.md": {
+   "embedded": "5787581c1459b8df29ef5ce4fa03f018f56e21737eaceb820cb9e8654814b005",
+   "disk": "5787581c1459b8df29ef5ce4fa03f018f56e21737eaceb820cb9e8654814b005"
+  }
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "6444b60205f387c0d82e21c9c2e9a2da1c9911cab30030d92b5561eced17cbfa"
+}
