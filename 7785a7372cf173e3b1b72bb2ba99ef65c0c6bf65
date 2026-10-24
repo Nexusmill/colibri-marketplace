@@ -1,0 +1,103 @@
+{
+ "type": "CLEAR",
+ "commit": "7785a7372cf173e3b1b72bb2ba99ef65c0c6bf65",
+ "caller": "zcode",
+ "when": "20261024-124237",
+ "files": {
+  ".claude-plugin/marketplace.json": {
+   "sha": "5a924908f3b52f7d7f74f5f168fe33d3cb72b653021c48a00f824ab1e3c095de",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  },
+  "plugins/adversary-gate/.claude-plugin/plugin.json": {
+   "sha": "e68562aa9be53421a5b461b57fa30857f87ae04f6ff3cb6af40de4b9844f6cb4",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  },
+  "plugins/adversary-gate/tools/adversary_audit.py": {
+   "sha": "2712c66416abb1f690738324096e6eff2caff2d6b0d8fa16d997ed3559be500a",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  },
+  "plugins/adversary-gate/tools/adversary_gate.py": {
+   "sha": "7c734aad066b949bdcd38864735a03163f95dd5a665164dfc97f733679d5b509",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  },
+  "plugins/adversary-gate/tools/config_hooks.py": {
+   "sha": "c162bc1bced61b4932e563905246aed5cea1e04053e2fdaa7e888e21730e849e",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  },
+  "plugins/adversary-gate/tools/docscan.py": {
+   "sha": "297ecd0b7542faf0e881bff76cb88ba0ebec7efd7b996913693fbe083c83278f",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  },
+  "plugins/adversary-gate/tools/finding_adjudicator.py": {
+   "sha": "9dc3445ab25fe1ae8e804c7f77cf72df9f967542e08e4e8291902c75bcd93ce6",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  },
+  "plugins/adversary-gate/tools/gate_selftest.py": {
+   "sha": "0527041286b441ba1e11a334dc529004a923efcc36b81c433efd79bdb6278b84",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  },
+  "plugins/adversary-gate/tools/install_gate.py": {
+   "sha": "075ac91019b17a380d6fb0ca61e3317dc5fb4eb95d420ec94321d76d74ed69d6",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  },
+  "plugins/adversary-gate/tools/install_selftest.py": {
+   "sha": "2b423450d893382d3cfa3a23fa4a9d72a1b06ab138215a1bbd0463f089994241",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  },
+  "plugins/adversary-gate/tools/runtime_loader.py": {
+   "sha": "8d7c2e56e062b1d96964df7dfc6971849457197ab00939699fe9916ddb4ae974",
+   "model": "deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8",
+   "verdict": "WARN",
+   "when": "20261024-124216",
+   "artifact": ".adversary\\reviews\\gate_20261024-124216.md"
+  }
+ },
+ "artifacts": {
+  ".adversary\\reviews\\gate_20261024-124216.md": "model: deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8 | provider: DeepInfra | usage: {'prompt_tokens': 255137, 'completion_tokens': 69715, 'total_tokens': 324852, 'cost': 0.06153289464, 'is_byok': False, 'prompt_tokens_details': {'cached_tokens': 47104, 'cache_write_tokens': 0, 'audio_tokens': 0, 'video_tokens': 0}, 'cost_details': {'upstream_inference_cost': 0.06153289464, 'upstream_inference_prompt_cost': 0.03078857964, 'upstream_inference_completions_cost': 0.030744315}, 'completion_tokens_details': {'reasoning_tokens': 68771, 'image_tokens': 0, 'audio_tokens': 0}} | scrubbed: 0 | files: ['.claude-plugin/marketplace.json', 'plugins/adversary-gate/.claude-plugin/plugin.json', 'plugins/adversary-gate/tools/adversary_audit.py', 'plugins/adversary-gate/tools/adversary_gate.py', 'plugins/adversary-gate/tools/config_hooks.py', 'plugins/adversary-gate/tools/docscan.py', 'plugins/adversary-gate/tools/finding_adjudicator.py', 'plugins/adversary-gate/tools/gate_selftest.py', 'plugins/adversary-gate/tools/install_gate.py', 'plugins/adversary-gate/tools/install_selftest.py', 'plugins/adversary-gate/tools/runtime_loader.py'] | prompt: gate/adversary-review@1 (cache) | caller: zcode\n\nI reviewed the staged bytes against the change's own claims (vendored refresh of suite-reviewed code, version bumps, new tier-2/backstop/audit/ship-gate/recurrence-screen/installer-runtime logic). I verified call sites (`_call_model_ex`/`_call_one_model`/`_output_token_budget`/`_local_pregate`/`_pregate_check_one`/`_push_secret_barrier`/`_unshippable_audits`), the tier split vs `_tier2_in_play`, the batch resume identity, the `check-push` argv normalization against both hookdir and config-hook shapes, the auditor's reordered artifact check, and the selftest rows against the new constants. One interaction survives scrutiny.\n\n**LOW \u2014 `plugins/adversary-gate/tools/adversary_gate.py`, `artifact_round` / `_adjudicate_cycle` (prompt-note insertion corrupts the artifact header's `files:` parse)**\n\nQuoted lines (all present verbatim in the provided file):\n\n```\n            pm = _LAST_PROMPT_META or {}\n            if pm.get(\"name\"):\n                prompt_note = \" | prompt: %s@%s (%s)\" % (\n                    pm.get(\"name\"), pm.get(\"version\"), pm.get(\"origin\"))\n```\n```\n                                           \" | caller:\", prompt_note + \" | caller:\") + body_text,\n```\n```\n            frag = re.split(r\"\\s*\\|\\s*caller:\\s*\\S+\\s*$\", m.group(1))[0].strip()\n            try:\n                val = ast.literal_eval(frag) if frag.endswith(\"]\") else None\n```\n\nTrigger: the prompt layer resolves (Langfuse store reachable, `_pl.get_prompt` returns a meta carrying `name`), so `prompt_note` is non-empty and the artifact header becomes `... | files: ['a.py'] | prompt: gate/adversary-review@<v> (<origin>) | caller: ...`. `_adjudicate_cycle`'s `files:` capture now yields a `frag` that ends in `)` instead of `]`, so `ast.literal_eval` is skipped and the fallback `frag.strip(\"[]\").split(\",\")` runs. For a single-file denial the only token becomes `a.py'] | prompt: gate/... (\u2026)`; for multi-file denials the last file merges with the note. Impact: `_parse_findings(denial[4], denial[3])` finds no cited file, so every finding falls back to commit-level classification (`_outcome([])` uses all `changed` keys), and for rounds whose sidecar stamp failed/legacy the `_touches` fallback never matches. The persisted `adjudications.json` true-rate evidence then carries wrong per-finding file attribution/outcomes. No gate decision (clearance, note, push) is affected \u2014 evidence only, and only where the prompt layer is active (the shipped plugin runs the builtin `PROMPT`, so the marketplace copy itself is unaffected; the vendored code is what breaks at the author suite). The existing `caller-header-bracket-name-survives` selftest builds the header via `_review_header` without a prompt note, so it cannot catch this.\n\nI checked and discarded the other hypotheses: the `check-push` `nargs=\"*\"` normalization handles both the legacy `\"$1\"` (expands empty, real argv appended) and the new no-arg entries; the batch receipt still keys on the full request body while the `core_sha` sidecar only pins prompt bytes; `BatchReviewPending` is re-raised before the `SystemExit` fallback so a live paid job is never resubmitted; `_tier2_in_play` correctly gates the effort/budget restyle off manual overrides and `TIER1_OFF`; the auditor's artifact-hash hoist is byte-equivalent for mac-carrying notes and only tightens mac-less ones; `_write_text_epoch` anchors at the correct parent; `_rs_index_reader`'s `FileNotFoundError`/`RuntimeError` split matches `_rs_screen_repo`'s handling. None of these yield a concrete defect in reachable code.\n\nVERDICT: WARN"
+ },
+ "adjudication": {
+  "denial": "reviews/gate_20261023-194730.md",
+  "outcomes": {
+   "fixed": 2
+  },
+  "detail": ".adversary/adjudications.json"
+ },
+ "artifacts_sha256": {
+  ".adversary\\reviews\\gate_20261024-124216.md": {
+   "embedded": "ad2347d60de5e130871e289a6e1d023d05fb03e0fc72e41d6d48ee5ca8a5c891",
+   "disk": "ad2347d60de5e130871e289a6e1d023d05fb03e0fc72e41d6d48ee5ca8a5c891"
+  }
+ },
+ "mac_key_created": "2026-10-09T17:45:11",
+ "mac": "fa373fa0525d54154655df39cb584260aea2c3f073fdeae6ca02e145aef5e946"
+}
