@@ -26,15 +26,17 @@ gate - no model calls, no network, no index dependency, milliseconds:
                            verbatim against the staged bytes, and flag
                            proximity to a semantic delta.
 
-VERDICT SEMANTICS (the judgment call the owner delegated, 2026-10-10): the
-adjudicator ANNOTATES, it never rules. The external reviewer's VERDICT line
-stays the commit authority; every disposition here is evidence for the
-developer's rebuttal and for the true-rate ledger. Measured basis: the
-underlying checks confirmed 0 false positives over 15 clean replay rounds -
-but on one repo, one reviewer family, one mutation grammar; that is not a
-basis for letting a deterministic layer override a paid verdict. When the
-30+ commit corpus run exists, "REFUTED findings do not count toward BLOCK"
-is a one-line change with data behind it.
+VERDICT SEMANTICS (upgraded by owner order 2026-10-12 - the corpus basis the
+original delegation demanded now exists: EV-201/202/203 plus this week's
+rounds): the adjudicator still does not rewrite verdicts itself, but the GATE
+caller now treats an ALL-REFUTED finding set (every finding NO_ANCHOR or
+UNRESOLVED_FILE - the fabrication signatures; a pure-removal review is exempt,
+it has no bytes to anchor against) as verdict-void: no clearance is written
+and no remediation is owed, but NEVER an auto-CLEAR - a deterministic layer
+never authorizes a commit; the review re-runs. Any finding with a surviving
+anchor (CONFIRMED/PARTIAL_ANCHOR, FILE_ONLY) keeps the verdict standing - the
+strike is deliberately conservative. Measured basis for the underlying checks:
+0 false positives over 15 clean replay rounds.
 """
 import difflib
 import re
@@ -266,10 +268,13 @@ def adjudicate_review(text, files, blobs, diff):
 
 
 def summary_line(res):
-    """One console line for the BLOCK path; the verdict is unchanged."""
+    """One console line for the BLOCK path. Since the 2026-10-12 upgrade the
+    caller treats an all-refuted finding set as verdict-void (fail-closed
+    re-review); any surviving anchor keeps the verdict - the strike is
+    conservative."""
     t = res["totals"]
     n = len(res["findings"])
-    return ("finding adjudication (evidence only, verdict unchanged): %d finding(s) - "
+    return ("finding adjudication: %d finding(s) - "
             "%d anchored, %d partial, %d file-only, %d no-anchor, %d unresolved-file; "
             "%d semantic delta(s) in this diff"
             % (n, t["CONFIRMED_ANCHOR"], t["PARTIAL_ANCHOR"], t["FILE_ONLY"],

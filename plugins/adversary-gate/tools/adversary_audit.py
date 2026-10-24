@@ -239,9 +239,23 @@ def _verify_chain_mac(repo, rev, ref, note):
     no longer match, is a violation (the tripwire fires)."""
     import hashlib
     import hmac as _h
+    # gate round 2026-10-23 (re-vendor reviews, colibri LOW + repo-memory
+    # findings): the note is hostile input - type-guard every field the
+    # walk touches, and verify the EMBEDDED artifact hashes for EVERY note
+    # BEFORE any key-dependent branch: the embedded==disk check needs no
+    # key, and both the legacy branch and the no-key degrade returned None
+    # before it, so mac-less notes and fresh CI clones never verified the
+    # one integrity datum they can (the comments claimed they did).
+    if not isinstance(note, dict):
+        return "note is not a JSON object (malformed)"
     key_p = os.path.join(repo, ".adversary", "note_hmac.key")
     key = None
-    key_created = note.get("mac_key_created", "")
+    # gate round 2026-10-23 (colibri re-vendor review MEDIUM): the legacy
+    # decision MUST come from the LOCAL key file's stamp. Seeding from the
+    # note's own mac_key_created let an unauthenticated note claim a future
+    # key-creation date and exempt itself - the forged? branch could never
+    # fire. The note's field is ignored for this decision entirely.
+    key_created = ""
     try:
       if os.path.isfile(key_p):
         for ln in open(key_p, encoding="utf-8", errors="replace").read().splitlines():
@@ -252,9 +266,36 @@ def _verify_chain_mac(repo, rev, ref, note):
                 except ValueError:
                     key = None   # corrupt hex: degrade to unverifiable-mac
             elif ln.startswith("# created="):
-                key_created = key_created or ln.split("=", 1)[1].strip()
+                key_created = ln.split("=", 1)[1].strip()
     except OSError:
         key = None            # unreadable key: degrade, never crash
+    import hashlib as _hl
+    arts = note.get("artifacts_sha256")
+    if arts is not None:
+        if not isinstance(arts, dict):
+            return "artifacts_sha256 is malformed (forged evidence)"
+        for rel, shas in arts.items():
+            if not isinstance(shas, dict):
+                return "artifact entry %s is malformed (forged evidence)" % rel
+            if shas.get("embedded") != shas.get("disk"):
+                return "embedded artifact %s hash mismatch (forged evidence)" % rel
+            # LIVE disk check: post-notarization tampering of the evidence file
+            # (record cannot catch a pre-record tamper - it reads both sides from
+            # the same bytes; the note is the anchor, the auditor is the witness)
+            live_p = os.path.join(repo, str(rel).replace("/", os.sep))
+            if not os.path.isfile(live_p):
+                # .adversary is gitignored transient state - fresh clones/CI never
+                # have the evidence files; the EMBEDDED hashes still verify the note
+                # body self-consistency. Absence is unverifiable, not tampering
+                # (gate round gate_20261009-063510 HIGH).
+                continue
+            try:
+                live_s = open(live_p, encoding="utf-8", errors="replace").read()[:100_000]
+            except OSError:
+                live_s = ""
+            live_sha = _hl.sha256(live_s.encode("utf-8", "replace")).hexdigest()
+            if live_sha != shas.get("disk"):
+                return "artifact %s changed on disk after notarization (tampered evidence)" % rel
     mac = note.get("mac")
     if not mac:
         # legacy exemption with FORMAT-NORMALIZED dates: note stamps are
@@ -307,7 +348,7 @@ def _verify_chain_mac(repo, rev, ref, note):
             pn = json.loads(raw)
         except ValueError:
             continue
-        if pn.get("mac"):
+        if isinstance(pn, dict) and isinstance(pn.get("mac"), str) and pn["mac"]:
             prior = pn["mac"]
             break
     body = dict(note)
@@ -316,28 +357,6 @@ def _verify_chain_mac(repo, rev, ref, note):
     want = _h.new(key, (payload + "|" + prior).encode("utf-8"), "sha256").hexdigest()
     if want != mac:
         return "chain mac mismatch (note body or prior note tampered)"
-    arts = note.get("artifacts_sha256") or {}
-    import hashlib as _hl
-    for rel, shas in arts.items():
-        if shas.get("embedded") != shas.get("disk"):
-            return "embedded artifact %s hash mismatch (forged evidence)" % rel
-        # LIVE disk check: post-notarization tampering of the evidence file
-        # (record cannot catch a pre-record tamper - it reads both sides from
-        # the same bytes; the note is the anchor, the auditor is the witness)
-        live_p = os.path.join(repo, rel.replace("/", os.sep))
-        if not os.path.isfile(live_p):
-            # .adversary is gitignored transient state - fresh clones/CI never
-            # have the evidence files; the EMBEDDED hashes still verify the note
-            # body self-consistency. Absence is unverifiable, not tampering
-            # (gate round gate_20261009-063510 HIGH).
-            continue
-        try:
-            live_s = open(live_p, encoding="utf-8", errors="replace").read()[:100_000]
-        except OSError:
-            live_s = ""
-        live_sha = _hl.sha256(live_s.encode("utf-8", "replace")).hexdigest()
-        if live_sha != shas.get("disk"):
-            return "artifact %s changed on disk after notarization (tampered evidence)" % rel
     return None
 
 def root_abs(repo):

@@ -23,9 +23,21 @@ def check(name, ok, detail=""):
     print(("PASS " if ok else "FAIL ") + name + ((" " + detail) if detail and not ok else ""))
 
 
+_ISOLATED_GLOBAL = os.path.join(tempfile.mkdtemp(prefix="advgate_noglobal_"), "empty.gitconfig")
+open(_ISOLATED_GLOBAL, "w").close()
+
+
 def git(repo, *args, expect_ok=True):
+    # Harness drift 2026-10-14 (round 133017 finding 1): machine-wide config
+    # hooks double-fired after the fixture's local hookdir pin and executed
+    # the INSTALLED snapshot instead of the working tree under test. Pointing
+    # GIT_CONFIG_GLOBAL at an empty file keeps every fixture git call free of
+    # global config - config hooks included - so the local hookdir pin stays
+    # the ONLY hook and execs the working-tree gate: hermetic again, and a
+    # fresh clone or CI without machine arming behaves identically.
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=_ISOLATED_GLOBAL)
     p = subprocess.run([GIT, "-C", repo] + list(args), capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace", env=env)
     if expect_ok and p.returncode != 0:
         raise SystemExit("git %s: %s" % (args[:2], p.stderr[:300]))
     return p
@@ -77,6 +89,67 @@ def main():
           and any(f.endswith(".txt") for f in ["x.txt"] if ".txt" in _g.DOCSCAN_EXTS),
           ".txt is BOTH reviewed code AND locally docscanned (union, not either/or)")
 
+    # 0b. biome pre-gate compatibility (2026-10-17, contract
+    # docs/plans/2026-10-17-biome-pregate-fix.md): biome 2.5.15 exits 1
+    # "The contents aren't fixed" UNCONDITIONALLY in stdin mode - diagnostics
+    # are never emitted (valid or broken, flags or not) - so the old rc!=0 +
+    # /pars/i heuristic matched JSON.parse in the ECHOED SOURCE and refused
+    # valid .mjs (EV-124 false-block), while broken files without a "pars"
+    # substring sailed through. Classification must key on biome's own
+    # category="parse" diagnostics: never on exit codes or text regexes.
+    import re as _re_bio
+    import shutil as _sh_bio
+    if _sh_bio.which("biome") is None:
+        check("pregate_biome_rows_degrade_skip", True,
+              "biome absent on PATH - T1/T2 rows skip per the degrade contract")
+    else:
+        _f1, _d1 = _g._pregate_check_one(
+            "probe/jsonparse.mjs", "let x = 1;\nconst v = JSON.parse('{}');\n")
+        check("pregate_biome_valid_mjs_with_json_parse", not _f1 and not _d1,
+              "fails=%r degraded=%r" % (_f1, sorted(_d1)))
+        _f2, _d2 = _g._pregate_check_one("probe/broken.mjs", "let x = ((\n")
+        check("pregate_biome_broken_mjs_refused_with_diagnostic",
+              len(_f2) == 1
+              and _f2[0].startswith("biome-parse probe/broken.mjs:")
+              and _re_bio.search(r"line \d+ col \d+", _f2[0])
+              and "let x = ((" not in _f2[0],
+              "fails=%r" % (_f2,))
+        _f2b, _d2b = _g._pregate_check_one("probe/trunc.mjs", "import { x } from\n")
+        check("pregate_biome_truncated_import_refused", bool(_f2b),
+              "fails=%r" % (_f2b,))
+        _old_path_bio = os.environ.get("PATH", "")
+        try:
+            os.environ["PATH"] = tempfile.mkdtemp(prefix="advbioempty_")
+            _f4, _d4 = _g._pregate_check_one("probe/x.mjs", "let y = 2;\n")
+        finally:
+            os.environ["PATH"] = _old_path_bio
+        check("pregate_biome_degrades_when_absent", not _f4 and _d4 == {"biome"},
+              "fails=%r degraded=%r" % (_f4, sorted(_d4)))
+        # Round 2 (WARN finding on 403e169, addressed): a repo-level biome.json
+        # must keep its authority over the probe - the old stdin invocation
+        # resolved the repo's config via cwd, and silently dropping it would
+        # let defaults parse files the repo config scopes differently. An
+        # EXCLUDING config means biome processes 0 files: that must degrade
+        # LOUD (never a silent default-parse pass); an everything-config must
+        # still pass clean (the fix must not over-apply). Round 3 (d78e99b):
+        # the root arrives as a PARAMETER (no git I/O inside the check), so
+        # these rows pass the config dir directly.
+        _cfgd = tempfile.mkdtemp(prefix="advbiocfg_")
+        with open(os.path.join(_cfgd, "biome.json"), "w", encoding="utf-8") as _cf:
+            _cf.write('{"files": {"includes": ["src/**"]}}')
+        _f5, _d5 = _g._pregate_check_one(
+            "probe/cfg.mjs", "let x = 1;\nconst v = JSON.parse('{}');\n", _cfgd)
+        check("pregate_biome_honors_repo_config", not _f5 and _d5 == {"biome"},
+              "fails=%r degraded=%r (an excluding repo config must degrade loud, "
+              "not silently parse with defaults)" % (_f5, sorted(_d5)))
+        with open(os.path.join(_cfgd, "biome.json"), "w", encoding="utf-8") as _cf:
+            _cf.write('{"files": {"includes": ["**"]}}')
+        _f5b, _d5b = _g._pregate_check_one(
+            "probe/cfg2.mjs", "let x = 1;\nconst v = JSON.parse('{}');\n", _cfgd)
+        check("pregate_biome_config_allowing_pass", not _f5b and not _d5b,
+              "fails=%r degraded=%r (an everything-config must still pass clean)"
+              % (_f5b, sorted(_d5b)))
+
     # Snapshot fetches each staged blob EXACTLY ONCE (owner order 2026-10-08: the
     # local pre-gate and tier eligibility must see the bytes before any paid call,
     # superseding the pre-2026-10-08 lazy-generator contract; the no-redundant-reads
@@ -125,7 +198,7 @@ def main():
     _ns_evidence.update(_compose_review_payload=lambda *a: "payload",
                         _scrub_text=lambda p: (p, []),
                         _route_chain=lambda m, p, c: (m, "default"),
-                        _call_model_ex=lambda *a: ("VERDICT: CLEAR", {}, "fixture", "fixture"),
+                        _call_model_ex=lambda *a, **k: ("VERDICT: CLEAR", {}, "fixture", "fixture"),
                         _staged_sha=lambda p: "fixture-sha",
                         _write_review_round=_unavailable_evidence,
                         _adv_dir=_forbidden_evidence, _save_clear=_forbidden_evidence)
@@ -150,7 +223,7 @@ def main():
             _fh.write('VALUE = "' + "a" * 260_000 + '"\n# BINARY_DIFF_MARKER\n')
         git(_td, "add", ".gitattributes", "large.py")
         _payloads_diff = []
-        def _review_diff(model, payload, timeout=1200):
+        def _review_diff(model, payload, timeout=1200, **kwargs):
             _payloads_diff.append(payload)
             return "VERDICT: BLOCK", {}, "fixture", "fixture"
         _cwd_diff = os.getcwd()
@@ -182,7 +255,8 @@ def main():
               "opaque binary code reached the external reviewer")
 
         # Binary content on the removed side must also never reach the reviewer.
-        git(_td, "config", "core.hooksPath", os.path.join(_td, "unused-fixture-hooks"))
+        # (this fixture never sets a hooksPath and git() isolates GIT_CONFIG_GLOBAL,
+        # so no hook fires here at all - the base commit lands ungated by design)
         git(_td, "config", "user.name", "test")
         git(_td, "config", "user.email", "test@example.invalid")
         git(_td, "commit", "-qm", "binary fixture base")
@@ -302,27 +376,26 @@ def main():
     else:
         _e_detail = ""
     check("completion_parser_returns_provider", _ok, _e_detail)
-    # Owner 2026-10-08 (tiered restructure + escalation pick): tier 1 =
-    # v4.1-flash pinned baidu/fp8 PRIMARY + deepinfra/fp8 FAILOVER (endpoints-API:
-    # $0.0354/$0.1416/$0.0007 and $0.14/$0.42/$0.0042; glm-5.3-flash retired on
-    # price). Tier 2 ESCALATION = tencent/hy4-preview pinned tencent/fp8 (first
-    # party, cheapest: $0.7506/$2.2509/$0.0378) + novita/fp8 backup (100% 1-day
-    # uptime); kimi LAST.
+    # Ladder order 2026-10-12 (current): tier 1 = v4.1-flash dual-pin (baidu/fp8
+    # primary + deepinfra/fp8 failover); tier 2 = the tier-1 top rung at effort
+    # HIGH + a DISTINCT-family fallback (qwen3.8-omni-flash); hy4 and kimi
+    # RETIRED by owner cost ruling; grok/glm off-ladder. The literal list below
+    # was dropped on purpose (harness drift 2026-10-14 - it pinned the retired
+    # hy4/novita/kimi era): the row now asserts the ladder STRUCTURE against the
+    # authoritative constants so an owner rotation changes nothing here unless
+    # the shape itself changes.
     try:
         _chain = [m.strip() for m in _g.DEFAULT_CHAIN.split(",")]
-        _ok3 = (_chain == ["deepseek/deepseek-v4.1-flash@baidu/fp8",
-                           "deepseek/deepseek-v4.1-flash@deepinfra/fp8",
-                           "tencent/hy4-preview@tencent/fp8",
-                           "tencent/hy4-preview@novita/fp8",
-                           "moonshotai/kimi-k2.7-code"]
-                and "grok" not in _g.DEFAULT_CHAIN
-                and "glm" not in _g.DEFAULT_CHAIN
-                and _g._split_entry(_chain[0]) == (
-                    "deepseek/deepseek-v4.1-flash",
-                    ["baidu/fp8"])
-                and _g._split_entry(_chain[2]) == (
-                    "tencent/hy4-preview",
-                    ["tencent/fp8"])
+        _t1 = [_g._split_entry(e) for e in _g.TIER1_CHAIN.split(",")]
+        _t2 = [_g._split_entry(e) for e in _g.TIER2_CHAIN.split(",")]
+        _ok3 = (_g.DEFAULT_CHAIN == _g.TIER1_CHAIN + "," + _g.TIER2_CHAIN
+                and all(w not in _g.DEFAULT_CHAIN
+                        for w in ("grok", "glm", "hy4", "kimi"))
+                and len(_t1) == 2 and _t1[0][0] == _t1[1][0]      # one family, dual pin
+                and _t1[0][1] != _t1[1][1]                        # pins must differ
+                and len(_t2) == 2 and _t2[0] == _t1[0]            # escalation = tier-1 top
+                and _t2[1][0] != _t2[0][0]                        # fallback is another family
+                and len(_chain) == len(_t1) + len(_t2)
                 and _g._split_entry("z-ai/glm-5.3-flashx@z-ai/fp8") == (
                     "z-ai/glm-5.3-flashx", ["z-ai/fp8"]))
     except Exception as _e:  # noqa: BLE001 - a missing constant/helper is a FAIL, not a crashed selftest
@@ -411,7 +484,10 @@ def main():
     r = gate(tmp, "check")
     check("docs_pass_free", r.returncode == 0, r.stderr[:120])
 
-    # 6. THE HOOK: a real `git commit` is refused, then passes after clearance
+    # 6. THE HOOK: a real `git commit` is refused, then passes after clearance.
+    # (The local hookdir pin is the ONLY hook that fires here - see the
+    # GIT_CONFIG_GLOBAL isolation in git() - so these rows exercise the
+    # working-tree gate hermetically, independent of machine arming.)
     hooks = os.path.join(tmp, ".githooks")
     os.makedirs(hooks, exist_ok=True)
     open(os.path.join(hooks, "pre-commit"), "w", newline="\n").write(
@@ -607,6 +683,63 @@ def main():
     check("push_guard_remote_plus_baseline", r.returncode == 0,
           (r.stderr + r.stdout)[:200])
 
+    # 15b-ov. OWNER PUSH OVERRIDE (owner order 2026-10-24): a hard secret literal
+    # refuses the push; with .adversary/PUSH_OVERRIDE present the refusal
+    # downgrades to a LOUD warning, the file is consumed (one-shot) and the
+    # ruling logged to push_overrides.json. ISOLATED repo by design - a hard
+    # literal in the SHARED fixture poisons the new_branch_* rows below (they
+    # deliberately re-scan full history under dangling-tracking-ref scenarios;
+    # the coupling was found live by this battery).
+    _iso = tempfile.mkdtemp(prefix="advgate_ov_")
+    _iso_remote = tempfile.mkdtemp(prefix="advgate_ov_remote_")
+    subprocess.run([GIT, "init", "-q", "--bare", _iso_remote], capture_output=True)
+    subprocess.run([GIT, "init", "-q", _iso], capture_output=True)
+    for _k, _v in (("user.email", "t@t"), ("user.name", "t"),
+                   ("core.autocrlf", "false"),
+                   ("core.hooksPath", ".githooks")):
+        subprocess.run([GIT, "-C", _iso, "config", _k, _v], capture_output=True)
+    os.makedirs(os.path.join(_iso, ".githooks"))
+    open(os.path.join(_iso, ".githooks", "pre-push"), "w", newline="\n").write(
+        '#!/bin/sh\nexec "%s" "%s" check-push "$1"\n'
+        % (PY.replace("\\", "/"), GATE.replace("\\", "/")))
+    git(_iso, "remote", "add", "origin", _iso_remote)
+    _lit = "-----BEGIN " + "RSA PRIVATE KEY-----"   # anchored HARD shape, built
+                                                     # at runtime - no literal in the suite
+    open(os.path.join(_iso, "sec.py"), "w").write("k = '%s'\n" % _lit)
+    git(_iso, "add", "sec.py")
+    gate(_iso, "run", env_extra={"ADVERSARY_FAKE": "CLEAR"})
+    git(_iso, "commit", "-m", "carries a hard literal")
+    gate(_iso, "record")
+    r = git(_iso, "push", "origin", "HEAD:refs/heads/main", expect_ok=False)
+    check("push_guard_refuses_hard_literal", r.returncode != 0
+          and "secret LITERAL" in (r.stderr + r.stdout), (r.stderr + r.stdout)[:200])
+    # empty/whitespace ruling: ignored loudly, the one-shot NOT consumed
+    open(os.path.join(_iso, ".adversary", "PUSH_OVERRIDE"), "w").write("   \n")
+    r = git(_iso, "push", "origin", "HEAD:refs/heads/main", expect_ok=False)
+    check("push_override_empty_ignored",
+          r.returncode != 0 and "EMPTY PUSH_OVERRIDE" in (r.stderr + r.stdout)
+          and os.path.exists(os.path.join(_iso, ".adversary", "PUSH_OVERRIDE")),
+          (r.stderr + r.stdout)[:160])
+    open(os.path.join(_iso, ".adversary", "PUSH_OVERRIDE"), "w").write(
+        "owner ruling 2026-10-24: test ruling for the selftest row\n")
+    r = git(_iso, "push", "origin", "HEAD:refs/heads/main", expect_ok=False)
+    _po = os.path.join(_iso, ".adversary", "push_overrides.json")
+    _logged = False
+    if os.path.isfile(_po):
+        try:
+            _logged = any("test ruling" in str(x.get("reason", ""))
+                          for x in json.load(open(_po, encoding="utf-8")))
+        except ValueError:
+            pass
+    check("push_override_passes_hard_literal",
+          r.returncode == 0
+          and "OWNER PUSH OVERRIDE" in (r.stderr + r.stdout)
+          and not os.path.exists(os.path.join(_iso, ".adversary", "PUSH_OVERRIDE"))
+          and _logged,
+          "rc=%s %s consumed=%s logged=%s"
+          % (r.returncode, (r.stderr + r.stdout)[:160],
+             not os.path.exists(os.path.join(_iso, ".adversary", "PUSH_OVERRIDE")), _logged))
+
     # 15c. A NEW BRANCH must not re-scan history the remote already holds (push-guard catch
     # 2026-09-09: a four-commit docs branch on Nexusmill was refused for a chunk in a doc
     # published two days earlier - with the remote tip unknown the guard excluded only the
@@ -625,6 +758,7 @@ def main():
     check("codeonly_commit_ok", rc.returncode == 0, (rc.stderr + rc.stdout)[:150])
     gate(tmp, "record")
     env_block = dict(os.environ); env_block["ADVERSARY_SELFTEST"] = "1"; env_block["DOCSCAN_FAKE"] = "BLOCK"
+    env_block["GIT_CONFIG_GLOBAL"] = _ISOLATED_GLOBAL  # see git(): config hooks stay off these fixture pushes too
     r = subprocess.run([GIT, "push", "origin", "HEAD:refs/heads/feature-new"], capture_output=True, text=True,
                        encoding="utf-8", errors="replace", cwd=tmp, env=env_block)
     check("new_branch_skips_published_docs", r.returncode == 0,
@@ -2178,6 +2312,16 @@ def main():
         _rm = _g._route_chain("z-ai/glm-5.3-flash@parasail/fp8", "x" * 900000, "R")
         check("route_manual_model_override_bypasses",
               _rm == ("z-ai/glm-5.3-flash@parasail/fp8", "manual"), str(_rm)[:200])
+        # marketplace 0.3.9 review MEDIUM (2026-10-24): a manual override must
+        # NEVER ride the tier-2 effort/budget restyle - _tier2_in_play is the
+        # single authority the call site asks (was: tier2_chain truthiness,
+        # non-empty for overrides too - the restyle the comment forbade)
+        check("tier2_not_in_play_for_manual_override",
+              _g._tier2_in_play("z-ai/glm-5.3-flash@parasail/fp8") is False
+              and _g._tier2_in_play(_g.DEFAULT_CHAIN) is True
+              and _g._tier2_in_play(_g.TIER1_CHAIN.split(",")[0]) is False,
+              "manual=%r default=%r" % (_g._tier2_in_play("z-ai/glm-5.3-flash@parasail/fp8"),
+                                        _g._tier2_in_play(_g.DEFAULT_CHAIN)))
         os.environ["ADVERSARY_PROMOTE_OFF"] = "1"
         _rk = _g._route_chain(_RC, "x" * (_g.PROMOTE_MIN_CHARS + 1), "R")
         check("route_killswitch_returns_verbatim", _rk == (_RC, "off"), str(_rk)[:200])
@@ -2288,6 +2432,206 @@ def main():
         os.environ["OPENROUTER_API_KEY"] = "sk-selftest-never-real"
         check("jev_selftest_hermetic_even_with_key", _g._jev_decide(1234, False, 5) is None,
               "SELFTEST=1 with a key and no fake must consult nothing")
+
+        # ---- Verdict backstop (owner order 2026-10-19) ---------------------
+        # The typed-decision backstop for unreadable verdict lines: same wire,
+        # same key, hermetic fake under SELFTEST; block (the safe direction)
+        # accepted at moderate confidence, clear/warn (the authorizing
+        # directions) only at the safe bar; OFF switches; request/parse shapes
+        # pinned to the live 2026-09-23 contract.
+        os.environ.pop("OPENROUTER_API_KEY", None)
+        check("jev_verdict_failopen_without_key",
+              _g._jev_verdict_backstop("review text") is None,
+              "expected None with no key and no fake")
+        os.environ["ADVERSARY_JEV_VERDICT_FAKE"] = (
+            '{"verdict": {"type": "choice", "choice": "clear", '
+            '"probabilities": {"clear": 0.94, "warn": 0.04, "block": 0.02}, '
+            '"confidence": 0.94}}')
+        _vb = _g._jev_verdict_backstop("review text")
+        check("jev_verdict_fake_clear_at_safe_bar",
+              isinstance(_vb, dict) and _vb.get("choice") == "clear",
+              str(_vb))
+        os.environ["ADVERSARY_JEV_VERDICT_FAKE"] = (
+            '{"verdict": {"type": "choice", "choice": "clear", '
+            '"probabilities": {"clear": 0.6}, "confidence": 0.6}}')
+        check("jev_verdict_clear_below_safe_bar_denied",
+              _g._jev_verdict_backstop("review text") is None,
+              "clear under the safe bar must not authorize")
+        os.environ["ADVERSARY_JEV_VERDICT_FAKE"] = (
+            '{"verdict": {"type": "choice", "choice": "block", '
+            '"probabilities": {"block": 0.66}, "confidence": 0.66}}')
+        _vblk = _g._jev_verdict_backstop("review text")
+        check("jev_verdict_block_at_moderate_conf_accepted",
+              isinstance(_vblk, dict) and _vblk.get("choice") == "block",
+              "block is the safe direction - moderate confidence suffices")
+        os.environ["ADVERSARY_JEV_VERDICT_FAKE"] = "garbage{{"
+        check("jev_verdict_malformed_failopen",
+              _g._jev_verdict_backstop("review text") is None,
+              "expected None on garbage")
+        try:
+            _vbody = _g._jev_verdict_request_body("REVIEW")
+            _ok_vb = (_vbody.get("model") == "typesafe/jev-1.13"
+                      and _vbody.get("state") == "REVIEW"
+                      and set(_vbody.get("questions", {})) == {"verdict"}
+                      and set(_vbody["questions"]["verdict"]["criteria"])
+                      == {"clear", "warn", "block"}
+                      and "decisionsRequest" not in _vbody)
+        except Exception as _e:                                 # noqa: BLE001
+            _ok_vb, _vbody = False, repr(_e)
+        check("jev_verdict_request_shape_matches_live_contract",
+              _ok_vb, str(_vbody)[:300])
+        _vlive = {"answers": {"verdict": {"type": "choice", "choice": "warn",
+                                          "probabilities": {"clear": 0.05,
+                                                            "warn": 0.9,
+                                                            "block": 0.05},
+                                          "confidence": 0.9}}}
+        check("jev_verdict_parse_live_shape",
+              _g._jev_parse_verdict(_vlive) == {
+                  "choice": "warn",
+                  "probabilities": {"clear": 0.05, "warn": 0.9, "block": 0.05},
+                  "confidence": 0.9}
+              and _g._jev_parse_verdict({"answers": {"verdict": {
+                  "type": "choice", "choice": "weird"}}}) is None,
+              "live shape parses; out-of-vocabulary fails open")
+        os.environ["ADVERSARY_JEV_VERDICT_OFF"] = "1"
+        os.environ["ADVERSARY_JEV_VERDICT_FAKE"] = (
+            '{"verdict": {"type": "choice", "choice": "block", '
+            '"probabilities": {"block": 0.9}, "confidence": 0.9}}')
+        check("jev_verdict_killswitch_skips_consult",
+              _g._jev_verdict_backstop("review text") is None,
+              "dedicated OFF must skip even a valid fake")
+        os.environ.pop("ADVERSARY_JEV_VERDICT_OFF", None)
+        os.environ.pop("ADVERSARY_JEV_VERDICT_FAKE", None)
+        os.environ["OPENROUTER_API_KEY"] = "sk-selftest-never-real"
+        check("jev_verdict_selftest_hermetic_even_with_key",
+              _g._jev_verdict_backstop("review text") is None,
+              "SELFTEST=1 with a key and no fake must consult nothing")
+
+        # ---- Verdict backstop round 2 (gate BLOCK on its own source) -------
+        # Eligibility is the SAFE ambiguity class ONLY: 'incomplete' (a
+        # FINISHED response that emitted no verdict line - the completion
+        # guard raises on provider-truncated no-marker texts upstream).
+        # 'malformed' (truncated-with-marker, conflicting markers) stays
+        # terminal - never consulted, never verdict shopping. NaN/bool
+        # confidence must fail the bars (json.loads accepts both).
+        check("jev_verdict_eligibility_incomplete_only",
+              _g._jev_backstop_eligible("incomplete") is True
+              and all(_g._jev_backstop_eligible(o) is False for o in
+                      ("malformed", "CLEAR", "BLOCK", "WARN", "")),
+              "only the incomplete class may consult")
+        check("jev_verdict_conflicting_markers_stay_terminal",
+              _g._review_outcome("VERDICT: BLOCK\nprose\nVERDICT: CLEAR")
+              == "malformed",
+              "conflicting verdict markers must parse terminal")
+        os.environ.pop("OPENROUTER_API_KEY", None)
+        os.environ["ADVERSARY_JEV_VERDICT_FAKE"] = (
+            '{"verdict": {"type": "choice", "choice": "clear", '
+            '"probabilities": {"clear": 0.9}, "confidence": NaN}}')
+        check("jev_verdict_nan_confidence_denied",
+              _g._jev_verdict_backstop("review text") is None,
+              "NaN passes neither bar (NaN < bar is False) - must be denied")
+        os.environ["ADVERSARY_JEV_VERDICT_FAKE"] = (
+            '{"verdict": {"type": "choice", "choice": "clear", '
+            '"probabilities": {"clear": 0.9}, "confidence": true}}')
+        check("jev_verdict_bool_confidence_denied",
+              _g._jev_verdict_backstop("review text") is None,
+              "a boolean is not a confidence - must be denied")
+        os.environ["ADVERSARY_JEV_VERDICT_FAKE"] = (
+            '{"verdict": {"type": "choice", "choice": "block", '
+            '"probabilities": {"block": 0.9}, "confidence": 0.9}}')
+        _vann = _g._jev_verdict_backstop("body of the review")
+        _annotated = _g._jev_verdict_annotate("body of the review", _vann)
+        check("jev_verdict_annotation_parses_downstream",
+              _g._review_outcome(_annotated) == "BLOCK"
+              and "jev typed backstop" in _annotated
+              and _annotated.rstrip().splitlines()[-1].startswith("VERDICT:"),
+              str(_annotated)[-120:])
+        os.environ.pop("ADVERSARY_JEV_VERDICT_FAKE", None)
+        os.environ["OPENROUTER_API_KEY"] = "sk-selftest-never-real"
+
+        # ---- Verdict backstop round 3 (gate BLOCK: the empty-text hole) ---
+        # A provider response that completes with NO content ('choices': [],
+        # or empty/None content with finish_reason stop) reaches the
+        # incomplete branch as text='' - the backstop must refuse it BEFORE
+        # anything (even a fake) can answer, else it fabricates a non-empty
+        # CLEAR and falsifies 'an empty response can never CLEAR' (EV-004).
+        os.environ.pop("OPENROUTER_API_KEY", None)
+        os.environ["ADVERSARY_JEV_VERDICT_FAKE"] = (
+            '{"verdict": {"type": "choice", "choice": "clear", '
+            '"probabilities": {"clear": 0.95}, "confidence": 0.95}}')
+        check("jev_verdict_empty_text_never_consults",
+              _g._jev_verdict_backstop("") is None
+              and _g._jev_verdict_backstop("   \n  ") is None,
+              "content-less responses can never CLEAR - even with a fake set")
+        os.environ.pop("ADVERSARY_JEV_VERDICT_FAKE", None)
+        os.environ["OPENROUTER_API_KEY"] = "sk-selftest-never-real"
+
+        # ---- Verdict backstop round 4 (landed-WARN LOWs, fixed follow-up) --
+        # (a) the transmitted state is the SECRET-SCRUBBED review text (the
+        #     same _scrub_text every external transmit uses; xai:/local:
+        #     rungs never sent the bytes anywhere, so scrubbing is what
+        #     bounds disclosure for exactly those rungs);
+        # (b) the backstop is OPT-IN at the call site: _call_model_ex
+        #     defaults jev_backstop=False, only cmd_run's two tier sites
+        #     pass True - the reviewed_write pre-write broker (destructive
+        #     exact-byte write authorization) NEVER gains a verdict source
+        #     the reviewer did not render.
+        _sample_tok = "ghp_" + "A1b2c3D4e5" + "F6g7H8i9J0" + "K1l2"   # built from parts
+        _sample = "review body line\nTOKEN " + _sample_tok + " tail\nend"
+        _state = _g._jev_verdict_state(_sample)
+        check("jev_verdict_state_scrubs_secret_shapes",
+              _sample_tok not in _state and _state != _sample,
+              "the consult state must not carry a raw secret-shaped value")
+        import inspect as _inspect
+        import re as _re
+        _here = os.path.dirname(os.path.abspath(__file__))
+        _gate_src = open(os.path.join(_here, "adversary_gate.py"),
+                         encoding="utf-8", errors="replace").read()
+        _rw_src = open(os.path.join(_here, "reviewed_write.py"),
+                       encoding="utf-8", errors="replace").read()
+        # the WIRING is pinned, not the wrapper: the only request-body build
+        # feeds _jev_verdict_state, and no direct review_text call remains
+        _wired = bool(_re.search(
+            r"_jev_verdict_request_body\(\s*_jev_verdict_state\(", _gate_src))
+        _raw_leak = bool(_re.search(
+            r"(?<!def )_jev_verdict_request_body\(\s*review_text", _gate_src))
+        # call sites pinned via AST, not text counting: exactly two
+        # _call_model_ex calls carry jev_backstop=True, BOTH inside
+        # _cmd_run_snapshot's tier sites, and reviewed_write opts in nowhere
+        import ast as _ast
+        _tree = _ast.parse(_gate_src)
+        _optin = []
+
+        class _Visitor(_ast.NodeVisitor):
+            def __init__(self):
+                self.fn = None
+
+            def visit_FunctionDef(self, node):
+                prev, self.fn = self.fn, node.name
+                self.generic_visit(node)
+                self.fn = prev
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_Call(self, node):
+                if (isinstance(node.func, _ast.Name)
+                        and node.func.id == "_call_model_ex"):
+                    for kw in node.keywords:
+                        if (kw.arg == "jev_backstop" and isinstance(kw.value, _ast.Constant)
+                                and kw.value.value is True):
+                            _optin.append(self.fn)
+                self.generic_visit(node)
+
+        _Visitor().visit(_tree)
+        check("jev_verdict_backstop_opt_in_only",
+              _wired and not _raw_leak
+              and (_inspect.signature(_g._call_model_ex)
+                   .parameters["jev_backstop"].default is False)
+              and sorted(_optin) == ["_cmd_run_snapshot", "_cmd_run_snapshot"]
+              and "jev_backstop" not in _rw_src,
+              "wired through the scrubbed state; default off; exactly the "
+              "two _cmd_run_snapshot tier sites opt in; the pre-write "
+              "broker never does (optin=%s)" % _optin)
     finally:
         for _k, _v in _saved_env.items():
             if _v is None:

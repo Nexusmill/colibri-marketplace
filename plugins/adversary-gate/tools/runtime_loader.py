@@ -43,6 +43,13 @@ _SUITE_FILES = (
     "autoland/__init__.py", "autoland/scan_queue.py",
     "autoland/fleet_config.py", "autoland/locking.py",
     "autoland/front.py",
+    # generation CUT (owner order 2026-10-14): the Langfuse-managed prompt
+    # tranche ships inside the installed generation so hooks resolve the REAL
+    # prompt instead of the builtin fallback. Dependency-soft: prompt_layer
+    # imports langfuse lazily inside get_prompt - deployments without the SDK
+    # (and any langfuse failure) keep the fail-open builtin degradation, so a
+    # subset distribution simply omits the file (subset catalog, by design).
+    "prompt-layer/prompt_layer.py",
 )
 
 
@@ -86,9 +93,18 @@ def _generation_package(root, commit):
 
 def validate_generation(root, manifest, captured=None):
     root = unaliased(root)
+    # generation CUT (owner order 2026-10-14): validation is MANIFEST-SELF-
+    # DESCRIBING - the expected file-set is the generation's own manifest, not
+    # the module-derived CATALOG. The old equality against CATALOG self-
+    # deadlocked catalog growth (round 204933: a new launcher refusing every
+    # pre-growth generation kills every hook until a matching install lands,
+    # and the install itself dispatches through the dead launcher). Tamper
+    # strength is unchanged: the package must still match the manifest's own
+    # list exactly (below) and every file is sha-checked; fresh installs are
+    # always built from the full CURRENT catalog by reviewed_payloads.
     if (not isinstance(manifest, dict) or set(manifest) != {"commit", "files"} or
         not isinstance(manifest["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", manifest["commit"]) or
-        not isinstance(manifest["files"], dict) or set(manifest["files"]) != set(CATALOG)):
+        not isinstance(manifest["files"], dict) or not manifest["files"]):
         raise RuntimeDenied("Invalid installed enforcement manifest")
     package = _generation_package(root, manifest["commit"])
     for name, sha in manifest["files"].items():
@@ -106,8 +122,8 @@ def validate_generation(root, manifest, captured=None):
     contents = [unaliased(p) for p in package.rglob("*")]
     actual = {p.relative_to(package).as_posix() for p in contents if p.is_file()}
     directories = {p.relative_to(package).as_posix() for p in contents if p.is_dir()}
-    expected_directories = {Path(name).parent.as_posix() for name in CATALOG}
-    if actual != set(CATALOG):
+    expected_directories = {Path(name).parent.as_posix() for name in manifest["files"]}
+    if actual != set(manifest["files"]):
         raise RuntimeDenied("Unreviewed files in installed enforcement generation")
     if directories != expected_directories:
         raise RuntimeDenied("Unreviewed directories in installed enforcement generation")

@@ -31,6 +31,7 @@ tail beyond it is reported as pattern-floor-only, never silently skipped.
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -524,3 +525,361 @@ def _chunk(text, size):
     if cur:
         out.append("".join(cur))
     return out or [text]
+
+
+# =============================================================================
+# RECURRENCE SCREEN (owner order 2026-10-22: "I dont want any more lessons
+# gone unlearned anymore"). Lives in THIS file (the gate's local-scanner
+# module) by design, twice over: as a NEW catalog file it could never
+# reach the installed generation (gate round 3 finding 1 - the active
+# generation builds the next from its OWN catalog), and folded into
+# adversary_gate.py it pushed that CERTIFIED_CATALOG file over
+# MAX_FILE_BYTES, which the Tools-repo runtime-catalog coupling refuses
+# outright (round 4). Here it ships with every generation of the gate -
+# docscan.py is already cataloged - and stays far under every budget.
+# Abstract lessons are centralized below (_RS_LESSONS); each repo binds
+# them to its concrete coupled sites in <repo>/recurrence_screen.json;
+# the gate's cmd_check enforces the screen before anything else for
+# every repo the machine-wide hooks reach. Local, deterministic, no
+# network, no model calls.
+# =============================================================================
+
+_RS_LESSONS = [
+    {"id": "RL-0001", "class": "coupled-duplicate drift",
+     "statement": (
+         "Any value maintained in more than one place by design - a "
+         "mirror, a test expectation, a fixture catalog, a selftest pin - "
+         "drifts when one site changes and the others do not. Notes, "
+         "parity tests, and good intentions do not count: they are part "
+         "of the same coupling they fail to check. The coupling must be "
+         "verified mechanically against primary bytes at a forced "
+         "chokepoint (the commit gate), or it WILL drift."),
+     "detector": "parity",
+     "provenance": [
+         "2026-10-20 -> 2026-10-22: the flash-1017 repin updated the gate "
+         "chain constants but not the coupled sites - the tier-2 pin test "
+         "(retired baidu expectation), the autoland GATE_LADDER hand-mirror, "
+         "and fleet_selftest's fixture catalog + order tuple went stale the "
+         "same day; two batteries were red and one green-hollow, all "
+         "unnoticed until the audit-drain artifact fix ran them (docket "
+         "EV-269, Tools 6d75be7).",
+         "Same class, earlier: the per-session canon copies drifted until "
+         "propagation (G34); the jCodemunch mirrors were RETIRED because "
+         "maintaining them drifted (JCM-RETIRE-MIRRORS, 2026-08-12); the "
+         "RSI clustering RCA fields drifted from the rule texts until the "
+         "payload bound every reviewed byte (AGENT_STATE session 10j p2)."],
+     "landed": "2026-10-22"},
+    {"id": "RL-0002", "class": "guarantee claim without a machine-held test",
+     "statement": (
+         "A docstring, comment, or doc that STATES a guarantee is a "
+         "coupling to the test that proves it. Claims survive their tests: "
+         "the test is deleted, renamed, or weakened while the claim keeps "
+         "asserting - and the next fix restores the claim only against the "
+         "exact probe that caught it. Every stated guarantee must be bound "
+         "to its property test, and removing or rewording either side must "
+         "fail the commit until the binding is consciously updated."),
+     "detector": "guarantee",
+     "provenance": [
+         "2026-10-21/22: w6.py claimed 'the blinding is STRUCTURAL, not "
+         "procedural' while no test held the property - the audit lane "
+         "broke it twice (key co-location, EV-262; marker ineffective, "
+         "EV-263), each fix restoring the claim against only the last "
+         "probe, until the guarantee was rewritten to what is held.",
+         "2026-10-21/22: the s5 module docstring enumerated three dedup "
+         "tiers after TIER_PRIORITY gained a fourth (audit-lane WARN "
+         "20261021-002638, docket EV-264); the STRAT-4 docstrings "
+         "overclaimed 'reserves'/'executes' vs the code (EV-268 r2)."],
+     "landed": "2026-10-22"},
+    {"id": "RL-0003", "class": "coordinated rotation with coupled stragglers",
+     "statement": (
+         "When a value that exists in several places must change (a pin "
+         "rotation, a chain reorder, a protocol bump), rotating one site "
+         "and leaving stragglers is not a partial success - it is a silent "
+         "split-brain. The rotation is complete only when every coupled "
+         "site moves together, and only a mechanical parity check at "
+         "commit proves that."),
+     "detector": "parity",
+     "provenance": [
+         "Canon G37's 'pins rotate only together' clause predates and did "
+         "not prevent the 2026-10-20 stragglers (EV-269) - a behavioral "
+         "rule that recurred anyway until it gained a machine check.",
+         "The gate ladder order 2026-10-12 -> 2026-10-20 rotated the "
+         "chains while four coupled sites held the old era (test_ladder, "
+         "fleet_config, fleet_selftest fixture, fleet_selftest order)."],
+     "landed": "2026-10-22"},
+]
+
+_RS_DEFAULT_VALUES = r'"[^"]*"'
+_RS_DEFAULT_END = r"\n\)"
+
+
+def _rs_fail(msg):
+    return False, [msg]
+
+
+def _rs_slug_set(raw_values):
+    """Normalize captured raw quoted values into a comparable slug set:
+    strip quotes -> split comma-joined rungs -> strip provider pins ->
+    drop empties. Order-insensitive by construction (a set)."""
+    out = set()
+    for raw in raw_values:
+        for part in raw.strip('"').split(","):
+            part = part.strip()
+            if "@" in part:
+                part = part.split("@", 1)[0]
+            if part and " " not in part:
+                out.add(part)
+    return out
+
+
+def _rs_region(text, site, where):
+    anchor = site.get("anchor", "")
+    if not anchor:
+        return None, "%s: binding site has no anchor" % where
+    m = re.search(anchor, text)
+    if m is None:
+        return None, ("%s: region anchor not found - the coupled site "
+                      "moved (update the binding in recurrence_screen.json)"
+                      % where)
+    end = re.compile(site.get("end", _RS_DEFAULT_END)).search(text, m.start())
+    # INCLUSIVE end: the end pattern is typically the region's own closing
+    # token (a quote-paren, a bracket); excluding it truncated the final
+    # value out of every set (caught live on the gate's own bindings)
+    stop = end.end() if end else len(text)
+    return text[m.start():stop], None
+
+
+def _rs_wt_reader(root):
+    """Working-tree reader (the CLI/manual-audit default). A root that
+    does not exist raises RuntimeError (round 5 finding 2: a mistyped
+    --repo path read as 'nothing bound' and printed a false PASS)."""
+    if not os.path.isdir(root):
+        raise RuntimeError("repo root does not exist: %s" % root)
+    def read(rel):
+        with open(os.path.join(root, rel), encoding="utf-8",
+                  errors="replace") as fh:
+            return fh.read()
+    return read
+
+
+def _rs_index_reader(root, git_bin="git"):
+    """Index reader (the GATE path): read the state a commit would LAND -
+    the index entry, which is the staged blob for staged paths and the
+    HEAD blob for tracked-but-unchanged paths. Working-tree reads let
+    partial staging split a coupled pair past the screen (only one side
+    staged -> tree agrees, the commit lands the stale side), and unstaged
+    WIP edits in any bound file refused totally unrelated commits (gate
+    round 1 finding 2). The git child carries the same hardenings as the
+    gate's _run_git (round 2 finding 1): GIT_NO_REPLACE_OBJECTS (a local
+    git replace must not substitute the screened bytes), timeout=60 (a
+    stalled git fails closed, never wedges the machine-wide hook),
+    stdin=DEVNULL. A path genuinely absent from the index raises
+    FileNotFoundError; ANY other git failure raises RuntimeError so the
+    caller degrades LOUDLY instead of reading it as "nothing bound"
+    (round 2 finding 2)."""
+    def read(rel):
+        env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+        try:
+            r = subprocess.run(
+                [git_bin, "-C", root, "show", ":" + rel.replace("\\", "/")],
+                capture_output=True, text=True, errors="replace",
+                stdin=subprocess.DEVNULL, timeout=60, env=env, shell=False)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("git show %s timed out" % rel)
+        if r.returncode == 0:
+            return r.stdout
+        err = (r.stderr or "")
+        if ("does not exist" in err or "invalid object name" in err
+                or ("not in" in err and "index" in err)):
+            raise FileNotFoundError(rel)
+        raise RuntimeError("git show %s failed: %s" % (rel, err.strip()[:120]))
+    return read
+
+
+def _rs_site_set(site, lesson_id, name, reader):
+    where = "%s %s [%s]" % (lesson_id, name, site.get("file", "?"))
+    rel = site.get("file", "")
+    if not rel:
+        return None, "%s: binding site has no file" % where
+    try:
+        text = reader(rel)
+    except FileNotFoundError:
+        return None, ("%s: declared file missing (not in the screened "
+                      "state)" % where)
+    except OSError as exc:
+        return None, "%s: unreadable (%s)" % (where, str(exc)[:80])
+    region, err = _rs_region(text, site, where)
+    if err:
+        return None, err
+    values = re.findall(site.get("values", _RS_DEFAULT_VALUES), region)
+    exclude = site.get("exclude")
+    if exclude:
+        values = [v for v in values if not re.search(exclude, v)]
+    return _rs_slug_set(values), None
+
+
+def _rs_screen_parity(binding, lesson_id, reader):
+    name = binding.get("name", "?")
+    mode = binding.get("mode", "equal")
+    groups = binding.get("groups") or []
+    if len(groups) < 2:
+        return _rs_fail("%s %s: a parity binding needs >=2 groups" %
+                        (lesson_id, name))
+    sets_, errs = [], []
+    for gi, group in enumerate(groups):
+        # round 6 finding 2: a group with no sites (typo'd key, scaffold)
+        # yields an empty set - two empty sets compare EQUAL and the
+        # binding checks nothing while passing silently
+        if not group.get("sites"):
+            return _rs_fail("%s %s: group %d has no sites (typo'd key or "
+                            "scaffold?) - refusing" % (lesson_id, name, gi))
+        union = set()
+        for site in group.get("sites", []):
+            val, err = _rs_site_set(site, lesson_id, name, reader)
+            if err:
+                errs.append(err)
+            else:
+                union |= val
+        sets_.append(union)
+    if errs:
+        return False, errs
+    if all(not s for s in sets_):
+        return _rs_fail("%s %s: every group extracted ZERO values - the "
+                        "binding checks nothing (values regex never "
+                        "matched?)" % (lesson_id, name))
+    if mode == "superset":
+        if len(sets_) != 2:
+            return _rs_fail("%s %s: superset mode needs exactly 2 groups" %
+                            (lesson_id, name))
+        if not sets_[1] >= sets_[0]:
+            return _rs_fail("%s %s: superset violated - group2 %s is missing %s"
+                            % (lesson_id, name, sorted(sets_[1]),
+                               sorted(sets_[0] - sets_[1])))
+        return True, []
+    first = sets_[0]
+    for other in sets_[1:]:
+        if other != first:
+            return _rs_fail("%s %s: coupled sites disagree - %s vs %s "
+                            "(fix the drift in the cited sites, or rotate "
+                            "ALL coupled sites together)" %
+                            (lesson_id, name, sorted(first), sorted(other)))
+    return True, []
+
+
+def _rs_screen_guarantee(binding, lesson_id, reader):
+    name = binding.get("name", "?")
+    # round 5 finding 1: an empty pattern matches EVERYTHING - a typo'd
+    # key ("regexp"/"nameregex") or a claims/tests-less binding checked
+    # nothing and passed silently. Validate the shape up front; anything
+    # that would check nothing is a malformed binding refusal.
+    claims = binding.get("claims") or []
+    tests = binding.get("tests") or []
+    if not claims or not tests:
+        return _rs_fail("%s %s: a guarantee binding needs >=1 claim and "
+                        ">=1 test (nothing to check otherwise)" %
+                        (lesson_id, name))
+    for claim in claims:
+        if not claim.get("file") or not claim.get("regex"):
+            return _rs_fail("%s %s: malformed claim entry (needs file + "
+                            "regex; check for typo'd keys)" %
+                            (lesson_id, name))
+    for test in tests:
+        if not test.get("file") or not test.get("name_regex"):
+            return _rs_fail("%s %s: malformed test entry (needs file + "
+                            "name_regex; check for typo'd keys)" %
+                            (lesson_id, name))
+    msgs = []
+    for claim in binding.get("claims", []):
+        where = "%s %s [%s]" % (lesson_id, name, claim.get("file", "?"))
+        try:
+            text = reader(claim.get("file", ""))
+        except FileNotFoundError:
+            msgs.append("%s: claim file missing" % where)
+            continue
+        except OSError as exc:
+            msgs.append("%s: unreadable (%s)" % (where, str(exc)[:80]))
+            continue
+        if not re.search(claim.get("regex", ""), text):
+            msgs.append("%s: claim text not found - the guarantee was "
+                        "reworded or removed; restore it or consciously "
+                        "update the binding" % where)
+    for test in binding.get("tests", []):
+        where = "%s %s [%s]" % (lesson_id, name, test.get("file", "?"))
+        try:
+            text = reader(test.get("file", ""))
+        except FileNotFoundError:
+            msgs.append("%s: TEST FILE MISSING - the guarantee's property "
+                        "test is gone" % where)
+            continue
+        except OSError as exc:
+            msgs.append("%s: unreadable (%s)" % (where, str(exc)[:80]))
+            continue
+        if not re.search(test.get("name_regex", ""), text):
+            msgs.append("%s: property test not found - the guarantee "
+                        "outlived its test" % where)
+    return (not msgs), msgs
+
+
+def _rs_screen_repo(root, reader=None):
+    """Screen one repo against the centralized lessons. -> (ok, messages).
+    reader: file-content accessor (defaults to the working tree; the
+    gate's cmd_check passes an index reader so the screen judges the
+    state that would land). A repo with no manifest passes (nothing
+    bound); a corrupt manifest or a malformed binding REFUSES (never a
+    silent pass, never a silent disable - gate rounds 1-3)."""
+    if reader is None:
+        reader = _rs_wt_reader(root)
+    try:
+        lessons = {l["id"]: l for l in _RS_LESSONS}
+    except (KeyError, TypeError) as exc:
+        return _rs_fail("RECURRENCE CONTAINER malformed (%s) - refusing; "
+                        "this should be impossible (gate-reviewed code)"
+                        % str(exc)[:120])
+    try:
+        manifest = json.loads(reader("recurrence_screen.json"))
+        bindings = manifest["bindings"]
+    except FileNotFoundError:
+        return True, []                      # nothing bound in this state
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return _rs_fail("recurrence_screen.json manifest corrupt (%s) - "
+                        "refusing" % str(exc)[:120])
+    # round 6 finding 1: a non-list bindings value iterated zero times
+    # (silent pass) or raised TypeError into the caller's engine-failure
+    # degrade (gate skips the screen)
+    if not isinstance(bindings, list):
+        return _rs_fail("recurrence_screen.json manifest corrupt: "
+                        "'bindings' must be a list (got %s) - refusing"
+                        % type(bindings).__name__)
+    ok, msgs = True, []
+    for binding in bindings:
+        try:
+            lesson_id = binding.get("lesson", "?")
+            lesson = lessons.get(lesson_id)
+            if lesson is None:
+                ok = False
+                msgs.append("%s: unknown lesson id (not in the centralized "
+                            "container)" % lesson_id)
+                continue
+            detector = lesson.get("detector")
+            if detector == "parity":
+                b_ok, b_msgs = _rs_screen_parity(binding, lesson_id, reader)
+            elif detector == "guarantee":
+                b_ok, b_msgs = _rs_screen_guarantee(binding, lesson_id,
+                                                    reader)
+            else:
+                b_ok, b_msgs = _rs_fail(
+                    "%s: container declares unknown detector '%s'"
+                    % (lesson_id, detector))
+        except (AttributeError, TypeError, KeyError, ValueError,
+                re.error) as exc:
+            # gate round 1 finding 3: a parseable-but-malformed binding
+            # must REFUSE, never escape to the caller's engine-failure
+            # degrade (that would silently disable the coupling)
+            b_ok = False
+            b_msgs = ["%s: malformed binding (%s: %s) - refusing" %
+                      (binding.get("lesson", "?") if isinstance(binding, dict)
+                       else type(binding).__name__,
+                       type(exc).__name__, str(exc)[:100])]
+        ok = ok and b_ok
+        msgs.extend(b_msgs)
+    return ok, msgs

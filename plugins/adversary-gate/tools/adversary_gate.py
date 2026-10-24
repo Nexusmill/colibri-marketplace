@@ -198,14 +198,23 @@ def _env_int(name, default):
 
 
 # --- tiered reviewer structure (owner order 2026-10-08) ---
-# Tier 1 (quick rung): deepseek-v4.1-flash pinned primary+failover. Provider pins from
-# the live OpenRouter endpoints API 2026-10-08 (owner rule: prices never from
-# third-party tables): baidu/fp8 $0.0354 in / $0.1416 out / $0.0007 cache - the
-# cheapest completion AND cache of any fp8 host; deepinfra/fp8 $0.14/$0.42/cache
-# $0.0042 failover. Owner ruled glm-5.3-flash out (price rise) and ds-pro-0813 off
-# the every-commit rung.
-TIER1_CHAIN = ("deepseek/deepseek-v4.1-flash@baidu/fp8,"
-               "deepseek/deepseek-v4.1-flash@deepinfra/fp8")
+# OWNER ORDER 2026-10-20 (snapshot repin): deepseek-v4.1-flash moves to the 20261017
+# snapshot slug `deepseek/deepseek-v4.1-flash-1017` (the base slug serves 20260910;
+# the owner ruled -1017 the version we should be running). Pins from the live
+# OpenRouter endpoints API + endpoint-ping, both 2026-10-20: deepinfra/fp8 PRIMARY -
+# cheapest on ALL three axes ($0.0784 in / $0.2352 out / $0.002352 cache per M, fp8,
+# reasoning_effort + 1M ctx, ping safe_to_send=true); inference-net/fp8 FAILOVER
+# ($0.08 / $0.50 / $0.008, ping safe_to_send=true, provider echo confirmed). Baidu
+# does NOT host the -1017 snapshot (0910 only) - the old @baidu pin cannot carry it.
+# First-party @deepseek was pinged and 404s at routing for this key (tier filter) -
+# ruled out. Cost note vs the 0910@baidu pin: ~2.2x in / 1.66x out / 3.4x cache;
+# owner ruled the newer snapshot worth it. No -1017:batch slug exists yet - the
+# batch lane below stays on the base slug until one appears.
+# Prior pins (2026-10-08/12 era, for the record): baidu/fp8 $0.0354/$0.1416/cache
+# $0.0007 primary, deepinfra/fp8 failover; glm-5.3-flash and ds-pro-0813 ruled off
+# the every-commit rung earlier.
+TIER1_CHAIN = ("deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8,"
+               "deepseek/deepseek-v4.1-flash-1017@inference-net/fp8")
 # Tier 2 (strong escalation rung): owner pick 2026-10-08 - tencent/hy4-preview, "a
 # true escalation model". Pins from the live endpoints API (owner rule: never
 # third-party tables): tencent/fp8 PRIMARY - first-party AND cheapest on all three
@@ -213,13 +222,33 @@ TIER1_CHAIN = ("deepseek/deepseek-v4.1-flash@baidu/fp8,"
 # TIES the field); novita/fp8 BACKUP - identical fp8 at field price with the best
 # uptime of the alternatives (100% 1-day vs deepinfra 95.87% / siliconflow 94.50%).
 # kimi stays the terminal operational failover.
-TIER2_CHAIN = ("tencent/hy4-preview@tencent/fp8,"
-               "tencent/hy4-preview@novita/fp8,"
-               "moonshotai/kimi-k2.7-code")
+# OWNER ORDER 2026-10-12 (cost ruling, replay-eval evidence): hy4 RETIRED and
+# kimi-k2.7-code ELIMINATED. Tier-2 is deepseek-v4.1-flash (the tier-1 base model)
+# at reasoning effort HIGH - the 10-payload archive replay showed effort-high flash
+# catches 5/6 hy4 BLOCKs plus two hy4-missed defects at ~$0.05-0.07/round vs hy4's
+# $0.147 average. Fallback rung qwen/qwen3.8-omni-flash ($0.15 in / $0.47 out per M
+# - at the v4.1-flash price ceiling, reasoning-effort capable, 1M context, a fourth
+# model family that performed competently as the fusion-council analyst; glm
+# variants were ruled out - the local colibri reviewer is the same family and G37
+# forbids one family on both sides). Tier-1 stays DEFAULT effort: the quick rung.
+TIER2_CHAIN = ("deepseek/deepseek-v4.1-flash-1017@deepinfra/fp8,"
+               "qwen/qwen3.8-omni-flash")
+# Effort setting forwarded to every tier-2 (and batch/audit) OpenRouter call.
+# Live evidence 2026-10-12 (junk/hy4-eval): effort high is what recovers hy4-class
+# recall on flash; default-thinking flash downgraded 2 of 6 hy4 BLOCKs to WARN.
+# Empty string disables (sends no reasoning field).
+TIER2_REASONING_EFFORT = os.environ.get("ADVERSARY_TIER2_EFFORT", "high")
+# Effort-high reasoning loads 30-66k tokens on review payloads (measured); the
+# tier-1 floor of 32k starved it (arm-1: 4/10 rounds rendered NO verdict, reasoning
+# consumed the whole budget). Tier-2 runs with a raised floor/cap - arm-2 config.
+TIER2_MAX_OUTPUT_TOKENS = _env_int("ADVERSARY_TIER2_MAX_TOKENS", 64000)
+TIER2_MAX_OUTPUT_TOKENS_CAP = _env_int("ADVERSARY_TIER2_MAX_TOKENS_CAP", 128000)
 DEFAULT_CHAIN = TIER1_CHAIN + "," + TIER2_CHAIN
 DEFAULT_MODEL = os.environ.get("ADVERSARY_MODEL", DEFAULT_CHAIN)
-MAX_FILE_BYTES = 250_000          # per staged file included in full
-MAX_TOTAL_BYTES = 1_050_000       # complete runtime + tests + diff; pinned reviewers support this budget
+MAX_FILE_BYTES = 300_000          # per staged file included in full (2026-10-12: the
+                                  # engine itself crossed 250k after the owner-ordered
+                                  # ladder/PBT/adjudicator features; pins carry 1M+ ctx)
+MAX_TOTAL_BYTES = 1_150_000       # complete runtime + tests + diff; pinned reviewers support this budget
 # G-C (owner order 2026-10-08): verdicts are bytes and findings are bounded prose -
 # cap completion tokens so no verbose rung can bill unbounded output.
 # R3 (owner order 2026-10-08, same day): the ceiling is a DERIVATIVE OF PAYLOAD
@@ -245,7 +274,11 @@ TIER1_MAX_CHARS = _env_int("ADVERSARY_TIER1_MAX_CHARS", 40000)
 # AUDIT_PCT% for a post-hoc tier-2 BATCH re-review (50% off, zero commit latency).
 # BATCH POLICY (owner order 2026-10-08): the interactive commit path NEVER routes to
 # :batch - ONLY these post-hoc audits do, because nothing waits on their verdict.
-AUDIT_PCT = _env_int("ADVERSARY_AUDIT_PCT", 10)
+# OWNER ORDER 2026-10-13 (daily-docket ruling): AUDIT_PCT defaults to 100 - every
+# tier-1 CLEAR is queued; "not shippable until the tier-2 batch clears" is enforced
+# by the pre-push guard; gate-suite commits stay interactive tier-2 (catalog-coupled
+# payloads are tier-1-ineligible). ADVERSARY_AUDIT_PCT can still dial it down.
+AUDIT_PCT = _env_int("ADVERSARY_AUDIT_PCT", 100)
 TIER2_AUDIT_MODEL = os.environ.get(
     "ADVERSARY_AUDIT_MODEL",
     # The LIVE batch ladder primary (autoland/fleet_config.py BATCH_LADDER, gate
@@ -253,9 +286,21 @@ TIER2_AUDIT_MODEL = os.environ.get(
     # from the catalog 2026-09-22 - defaulting the audit to it dead-lettered every
     # sampled audit as REJECTED. Re-pin alongside TIER2_CHAIN after the owner's
     # benchmark pick; ADVERSARY_AUDIT_MODEL overrides.
-    "openai/gpt-6-luna-pro:batch")
+    # OWNER ORDER 2026-10-12: batch/audit lane moves to deepseek-v4.1-flash:batch
+    # at effort high ($0.11 in / $0.34 out per M - under the interactive pins);
+    # backup rung anthropic/claude-haiku-5.5:batch ($0.05 / $0.25, reasoning-effort
+    # capable, the most aggressive finder in the fusion-council eval; glm excluded
+    # per G37 family non-unification).
+    "deepseek/deepseek-v4.1-flash:batch")
+TIER2_AUDIT_FALLBACK_MODEL = os.environ.get(
+    "ADVERSARY_AUDIT_FALLBACK_MODEL",
+    "anthropic/claude-haiku-5.5:batch")
 # selftest fake sequencing: "BLOCK,CLEAR" consumes one verdict per model call.
 _FAKE_CALLS = 0
+# prompt-layer attribution (round 211906 MEDIUM): _call_one_model publishes the
+# resolved prompt meta here so artifact headers can record it (name@version,
+# origin) without threading a return value through the review flow
+_LAST_PROMPT_META = None
 
 # ---- LOCAL secret pre-scan (layered-enforcement fix 2026-09-02) --------------------------
 # WHY: the gate reviews by sending the staged diff to a REMOTE model (OpenRouter), and it
@@ -936,7 +981,124 @@ def _fixture_repo():
     return False
 
 
+def cmd_recurrence_screen(argv=None):
+    """CLI: `python adversary_gate.py recurrence-screen [--repo PATH]`.
+    Engine + centralized lessons live in docscan (_rs_*) - this file's
+    own catalog-size ceiling forbids the fold."""
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Screen a repo against the centralized recurrence "
+                    "lessons (working-tree read; the commit gate screens "
+                    "the index state).")
+    ap.add_argument("--repo", default=None,
+                    help="repo root; default resolves the git toplevel of "
+                         "the CWD (round 6 finding 3: a raw CWD default "
+                         "false-PASSed from subdirectories)")
+    a = ap.parse_args(argv)
+    repo = a.repo
+    if repo is None:
+        repo = _repo_root()
+    else:
+        try:
+            r = subprocess.run(
+                [GIT, "-C", repo, "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                timeout=60, env=dict(os.environ,
+                                     GIT_NO_REPLACE_OBJECTS="1"),
+                shell=False)
+            if r.returncode == 0:
+                repo = r.stdout.strip()
+        except Exception:
+            pass
+    if docscan is None:
+        print("recurrence screen: engine module unavailable (docscan)")
+        return 1
+    try:
+        ok, msgs = docscan._rs_screen_repo(repo)
+    except Exception as exc:      # fail closed, never a silent pass
+        print("recurrence screen: FAILED CLOSED (%s)" % str(exc)[:200])
+        return 1
+    for m in msgs:
+        print(m)
+    print("recurrence screen: %s (%s)" % ("PASS" if ok else "REFUSED",
+                                          repo))
+    return 0 if ok else 1
+
+
 def cmd_check(auto_review=False):
+    # RECURRENCE SCREEN (owner order 2026-10-22; engine + centralized
+    # lessons container live in docscan.py - this file's own catalog-size
+    # ceiling forbids the fold, and a NEW file could never reach the
+    # installed generation): every repo the gate touches scans itself at
+    # commit against the abstracted lessons, using its own
+    # recurrence_screen.json bindings. The screen reads the INDEX (the
+    # state this commit would land), runs before the fixture exemption
+    # (free + unconditional by construction), and its findings REFUSE.
+    # An unexpected ENGINE exception degrades to a loud warning - never a
+    # machine-wide brick. The owner OVERRIDE releases a screen refusal
+    # and is CONSUMED + RECORDED exactly like the code-override branch
+    # below (gate round 3 finding 2: a bypass that left the one-shot
+    # alive would release a second commit).
+    try:
+        _rs_root = _repo_root()
+        _rs_ok, _rs_msgs = docscan._rs_screen_repo(
+            _rs_root,
+            reader=docscan._rs_index_reader(_rs_root, GIT))
+    except Exception as _exc:            # engine bug: loud, never a brick
+        sys.stderr.write("adversary gate: recurrence screen ENGINE FAILURE "
+                         "(%s) - degraded to WARNING; report this.\n"
+                         % str(_exc)[:200])
+        _rs_ok, _rs_msgs = True, []
+    # round 7 finding 1: the code-override branch below must carry the
+    # screen-refusal provenance too (the docs-only path persists it; the
+    # code path was silently dropping it)
+    _rs_refusals_for_record = _rs_msgs if not _rs_ok else []
+    if not _rs_ok:
+        _ov = os.path.join(_adv_dir(_repo_root()), "OVERRIDE")
+        if os.path.isfile(_ov):
+            # round 5 finding 3: for a CODE commit the override must stay
+            # available to the code-override branch below (which consumes
+            # and records it properly) - consuming it here left the hatch
+            # needing two attempts and the second write dropped the
+            # screen_refusals provenance. Only the docs-only path (which
+            # returns before that branch) consumes it here.
+            if _staged_code_files() or _staged_removals():
+                sys.stderr.write("ADVERSARY GATE: recurrence screen "
+                                 "REFUSED, but the owner OVERRIDE is "
+                                 "present - it will be consumed by the "
+                                 "code-override path below; refusal "
+                                 "details:\n")
+                for _m in _rs_msgs:
+                    sys.stderr.write("  %s\n" % _m)
+            else:
+                _reason = open(_ov, encoding="utf-8",
+                               errors="replace").read().strip()
+                _save_json(_repo_root(), "override_used.json", {
+                    "reason": ("recurrence-screen refusal overridden: %s | %s"
+                               % (_reason[:400],
+                                  "; ".join(_rs_msgs)[:800])),
+                    "when": datetime.datetime.now().strftime(
+                        "%Y%m%d-%H%M%S"),
+                    "screen_refusals": _rs_msgs})
+                os.remove(_ov)
+                sys.stderr.write("ADVERSARY GATE: recurrence screen "
+                                 "REFUSED, but the owner OVERRIDE was "
+                                 "present - bypassed, one-shot CONSUMED, "
+                                 "refusal recorded in override_used.json:\n")
+                for _m in _rs_msgs:
+                    sys.stderr.write("  %s\n" % _m)
+        else:
+            sys.stderr.write("\nADVERSARY GATE: RECURRENCE SCREEN REFUSED "
+                             "the commit - a declared lesson coupling is "
+                             "violated (centralized abstracted lessons, "
+                             "owner order 2026-10-22):\n")
+            for _m in _rs_msgs:
+                sys.stderr.write("  %s\n" % _m)
+            sys.stderr.write("\nFix the drift in the cited sites (or rotate "
+                             "ALL coupled sites together); if the coupling "
+                             "itself changed, update recurrence_screen.json "
+                             "as part of the reviewed change.\n\n")
+            return 1
     if _fixture_repo():
         sys.stderr.write("adversary gate: repository under the profile Temp dir - pre-commit "
                          "review skipped (EV-045, owner ruling 2026-09-07); the push guard "
@@ -1007,8 +1169,10 @@ def cmd_check(auto_review=False):
             sys.stderr.write("adversary gate: docs scan CAPPED (%s) - the tail was NOT "
                              "semantically scanned.\n" % res.get("detail", ""))
     # Secrets and docs blocks never block a commit any more (owner ruling 2026-09-07), so the
-    # OVERRIDE is only ever consumed by a CODE-clearance bypass below; a docs-only commit -
-    # clean or warned - leaves the owner's one-shot hatch untouched.
+    # OVERRIDE is only ever consumed by a CODE-clearance bypass below, OR by a recurrence-screen
+    # refusal on a docs-only commit (the only path that returns before the code branch); a
+    # docs-only commit that is clean or merely warned still leaves the owner's one-shot hatch
+    # untouched.
     if not files and not removals:
         return 0                                          # docs/manifests pass free
     if override:
@@ -1023,7 +1187,8 @@ def cmd_check(auto_review=False):
         _save_json(root, "override_used.json",
                    {"reason": reason[:2000],
                     "when": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
-                    "staged": staged})
+                    "staged": staged,
+                    "screen_refusals": _rs_refusals_for_record})
         os.remove(ov)
         return 0
     clear = _load_clear(root)
@@ -1123,15 +1288,20 @@ def _call_model(model, user_content, timeout=1200, *, attempts=None):
     return _call_model_ex(model, user_content, timeout, attempts=attempts)[:3]
 
 
-def _call_model_ex(model, user_content, timeout=1200, *, attempts=None):
-    """Return (text, usage, model_used, provider); incomplete reviews advance the chain."""
+def _call_model_ex(model, user_content, timeout=1200, *, attempts=None,
+                   reasoning=None, max_tokens=None, jev_backstop=False):
+    """Return (text, usage, model_used, provider); incomplete reviews advance the chain.
+    jev_backstop is OPT-IN (default False): only cmd_run's tier sites enable the
+    typed-decision backstop - every other caller (the reviewed_write pre-write
+    broker included) never gains a verdict source the reviewer did not render."""
     chain = [m.strip() for m in model.split(",") if m.strip()]
     if not chain:
         raise SystemExit("ADVERSARY GATE: no model given (empty --model / ADVERSARY_MODEL)")
     history = attempts if attempts is not None else []
     for m in chain:
         try:
-            text, usage, provider = _call_one_model(m, user_content, timeout)
+            text, usage, provider = _call_one_model(m, user_content, timeout,
+                                                    reasoning=reasoning, max_tokens=max_tokens)
         except BatchReviewPending as exc:
             _review_attempt(history, m, None, "pending", error=exc)
             raise
@@ -1144,6 +1314,23 @@ def _call_model_ex(model, user_content, timeout=1200, *, attempts=None):
         outcome = _review_outcome(text)
         _review_attempt(history, m, provider, outcome, text=text)
         if outcome == "incomplete":
+            # Owner order 2026-10-19: the jev typed-decision BACKSTOP consults
+            # HERE - the only safe ambiguity class, and only for callers that
+            # opted in (cmd_run's tier sites; the pre-write broker never
+            # does). 'incomplete' at this point means the response FINISHED
+            # without a verdict line (the completion guard raises on
+            # provider-truncated no-marker texts); 'malformed' stays
+            # terminal below - never consulted, never verdict shopping.
+            # Resolution is by APPENDED verdict line so every downstream
+            # consumer (cmd_run, artifact, adjudicator re-reads, notary)
+            # sees one consistent verdict.
+            if jev_backstop:
+                backstop = _jev_verdict_backstop(text)
+                if backstop:
+                    text = _jev_verdict_annotate(text, backstop)
+                    _review_attempt(history, m, provider,
+                                    "backstop-" + backstop["choice"], text=text)
+                    return text, usage, m, provider
             continue
         # CLEAR, BLOCK, or malformed/conflicting verdict: terminal, never verdict shopping.
         return text, usage, m, provider
@@ -1316,7 +1503,169 @@ def _route_chain(model, payload, context):
     return model, "default"
 
 
-def _output_token_budget(user_content):
+# ---- Verdict backstop (owner order 2026-10-19: extend the jev integration
+# from routing-only to verdict-structuring) ------------------------------
+# A review text with no single final 'VERDICT: X' line used to fall straight
+# to a fail-closed BLOCK - safe, but it burned the whole round on a formatting
+# accident and sent the author to remediate a verdict that may never have
+# existed. The backstop asks jev (same Decisions-API wire as the router, same
+# key) ONE choice question over the review TEXT - the response of a model
+# that already read the staged bytes through the same provider, so no new
+# egress class opens; staged bytes themselves still never leave the machine.
+# Authority is strictly bounded: jev resolves ONLY the safe ambiguity class
+# ('incomplete' - a FINISHED, NON-EMPTY response with no verdict line; see
+# _jev_backstop_eligible and the empty-text guard); a well-formed verdict line
+# from the reviewer always wins; a jev-resolved WARN still passes through the
+# G-E proven-LOW collapse; every failure path (no key, error, unrecognized
+# shape, confidence under the bars) returns None and the caller keeps the
+# fail-closed BLOCK. BLOCK - the safe direction - is accepted at moderate
+# confidence; CLEAR/WARN - the authorizing directions - need the higher bar.
+
+JEV_VERDICT_CONF_BLOCK = 0.5     # safe direction: a low bar
+JEV_VERDICT_CONF_SAFE = 0.75     # authorizing direction: a high bar
+
+
+def _jev_backstop_eligible(outcome):
+    """ONLY the 'incomplete' class may consult the backstop. That class is
+    safe by construction: a text reaches the call site as 'incomplete' only
+    when _completion_guard did NOT raise - i.e. the response FINISHED (a
+    provider-truncated no-marker text raises IncompleteReviewResponse
+    upstream and advances the chain instead). 'malformed' - which carries
+    truncated-with-marker texts AND conflicting verdict markers - stays
+    terminal: never consulted, never verdict shopping (gate BLOCK round
+    gate_20261019-201553, Finding 1)."""
+    return outcome == "incomplete"
+
+
+def _jev_verdict_annotate(text, ans):
+    """Resolve a backstop decision by APPENDING a final verdict line, so
+    every downstream consumer - cmd_run's parse, the artifact, the
+    true-rate adjudicator's re-read, the notary - sees ONE consistent
+    verdict instead of divergent authorities (gate round Finding 2). The
+    annotation names its source on its own line and the appended verdict
+    line is the text's new last line, EXACTLY the bare shape _review_outcome
+    authorizes (a decorated verdict line would parse malformed)."""
+    return (text.rstrip()
+            + "\n\n[jev typed backstop: %s, confidence %s]\nVERDICT: %s"
+            % (ans["choice"], ans.get("confidence"), ans["choice"].upper()))
+
+
+def _jev_verdict_state(review_text):
+    """The consult state is the SECRET-SCRUBBED review text - the same
+    _scrub_text every other external transmit applies. For remote rungs the
+    text already transited the provider; for xai:/local: rungs it never
+    did, and the scrub is what bounds disclosure for exactly those rungs
+    (gate WARN round gate_20261019-210246, Finding 1)."""
+    state, redactions = _scrub_text(review_text)
+    if redactions:
+        sys.stderr.write("adversary verdict backstop: %d secret-shaped "
+                         "value(s) scrubbed from the consult state.\n"
+                         % len(redactions))
+    return state
+
+
+def _jev_verdict_request_body(review_text):
+    """The Decisions API request for one verdict-backstop consult - the same
+    factoring discipline as _jev_request_body so the wire contract stays
+    unit-pinned: unwrapped {model, state, questions}, criteria-shaped."""
+    return {"model": JEV_MODEL, "state": review_text,
+            "questions": {"verdict": {
+                "type": "choice",
+                "instructions": "The reviewer's text below has no machine-"
+                                "readable verdict line. Read it and pick the "
+                                "verdict it substantiates.",
+                "criteria": {
+                    "clear": "the review reports no defects",
+                    "warn": "the review reports only LOW-severity findings",
+                    "block": "the review reports any defect above LOW, or "
+                             "unresolved correctness/security doubt"}}}}
+
+
+def _jev_parse_verdict(d):
+    """Normalize one verdict answer to {choice, probabilities, confidence}
+    or None - None on any shape other than the live-verified one carrying an
+    in-vocabulary choice (fail-open, never a guess)."""
+    if not isinstance(d, dict):
+        return None
+    answers = d.get("answers")
+    if not isinstance(answers, dict):
+        return None
+    ans = answers.get("verdict")
+    if not (isinstance(ans, dict) and ans.get("choice") in ("clear", "warn", "block")):
+        return None
+    probs = ans.get("probabilities")
+    return {"choice": ans["choice"],
+            "probabilities": dict(probs) if isinstance(probs, dict) else {},
+            "confidence": ans.get("confidence")}
+
+
+def _jev_verdict_backstop(review_text):
+    """One typed-decision consult resolving an UNREADABLE verdict line, with
+    the confidence bars enforced HERE so no caller can bypass them: BLOCK
+    needs >= JEV_VERDICT_CONF_BLOCK, CLEAR/WARN need >= JEV_VERDICT_CONF_SAFE;
+    anything else - absent key, kill switch (ADVERSARY_JEV_OFF or
+    ADVERSARY_JEV_VERDICT_OFF), transport error, unrecognized shape, missing
+    or sub-bar confidence - returns None and the caller keeps the
+    fail-closed BLOCK. Under ADVERSARY_SELFTEST=1 the only source is
+    ADVERSARY_JEV_VERDICT_FAKE (hermetic even on a machine holding a key)."""
+    if os.environ.get("ADVERSARY_JEV_OFF") == "1":
+        return None
+    if os.environ.get("ADVERSARY_JEV_VERDICT_OFF") == "1":
+        return None
+    # An EMPTY provider response (empty choices, or empty/None content with
+    # finish_reason stop) also reaches the caller as 'incomplete' - it must
+    # refuse the consult BEFORE anything (even a selftest fake) can answer,
+    # else the annotation fabricates a non-empty CLEAR and falsifies the
+    # file's own invariant: an empty response can never CLEAR (gate BLOCK
+    # round gate_20261019-204818).
+    if not (review_text and review_text.strip()):
+        return None
+    if os.environ.get("ADVERSARY_SELFTEST") == "1":
+        fake = os.environ.get("ADVERSARY_JEV_VERDICT_FAKE", "")
+        if not fake:
+            return None
+        try:
+            ans = _jev_parse_verdict({"answers": json.loads(fake)})
+        except (ValueError, TypeError):
+            return None
+    else:
+        key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        if not key:
+            return None
+        try:
+            req = urllib.request.Request(
+                JEV_API_URL,
+                data=json.dumps(
+                    _jev_verdict_request_body(
+                        _jev_verdict_state(review_text))).encode("utf-8"),
+                headers={"Content-Type": "application/json",
+                         "Authorization": "Bearer " + key,
+                         "HTTP-Referer": "https://nexusmill.com",
+                         "X-Title": "Nexusmill adversary-gate"}, method="POST")
+            with urllib.request.urlopen(req, timeout=8) as r:
+                ans = _jev_parse_verdict(json.loads(r.read().decode("utf-8")))
+        except (OSError, ValueError, http.client.HTTPException) as e:
+            sys.stderr.write("adversary verdict backstop: jev consult failed-"
+                             "open (%s) - the fail-closed BLOCK stands.\n"
+                             % type(e).__name__)
+            return None
+    if ans is None:
+        return None
+    conf = ans.get("confidence")
+    # NaN passes no bar (NaN < bar is False) and a bool is not a confidence
+    # (isinstance(True, int) is True) - both must fail closed (gate round
+    # Finding 3; json.loads accepts non-standard NaN and bare true/false).
+    if isinstance(conf, bool) or not isinstance(conf, (int, float)) \
+            or conf != conf:
+        return None
+    bar = (JEV_VERDICT_CONF_BLOCK if ans["choice"] == "block"
+           else JEV_VERDICT_CONF_SAFE)
+    if conf < bar:
+        return None
+    return ans
+
+
+def _output_token_budget(user_content, floor=None, cap=None):
     """R3 (owner order 2026-10-08): the output ceiling DERIVED FROM PAYLOAD
     SIZE - floor + a fixed share of the payload's estimated tokens, hard-capped
     so a runaway composition bug still cannot bill unbounded output. Only the
@@ -1326,11 +1675,62 @@ def _output_token_budget(user_content):
     finish_reason=length with 100% reasoning tokens and zero content at flat
     2000 (and 8000, and 16000) on a 132,486-token review."""
     payload_tokens = len(user_content) // 4
-    budget = MAX_OUTPUT_TOKENS + payload_tokens * OUTPUT_TOKENS_PER_INPUT_PCT // 100
-    return min(budget, MAX_OUTPUT_TOKENS_CAP)
+    floor = MAX_OUTPUT_TOKENS if floor is None else floor
+    cap = MAX_OUTPUT_TOKENS_CAP if cap is None else cap
+    budget = floor + payload_tokens * OUTPUT_TOKENS_PER_INPUT_PCT // 100
+    return min(budget, cap)
 
 
-def _call_one_model(entry, user_content, timeout=1200):
+def _tier2_output_token_budget(user_content):
+    """Tier-2 (and batch/audit) output budget: the same payload-derivative shape
+    on the raised effort-high floor/cap (owner order 2026-10-12; TIER2_* constants)."""
+    return _output_token_budget(user_content,
+                                floor=TIER2_MAX_OUTPUT_TOKENS,
+                                cap=TIER2_MAX_OUTPUT_TOKENS_CAP)
+
+
+def _tier2_reasoning():
+    """The reasoning-effort object forwarded on tier-2/batch calls, or None when
+    disabled (ADVERSARY_TIER2_EFFORT="")."""
+    effort = (TIER2_REASONING_EFFORT or "").strip()
+    return {"effort": effort} if effort else None
+
+
+def _orobs_feed(resp, model, prompt_meta=None):
+    """Best-effort generation-id feed for the observability poller
+    (Tools/openrouter-observability); the poller enriches each id via
+    /api/v1/generation + /generation/content. STRICTLY fail-open: observability
+    must never block or fail a gate run, so every error is swallowed.
+    prompt_meta (owner order 2026-10-12): the prompt-layer fetch metadata rides
+    the feed line - the poller attaches it to the mirrored Langfuse generation
+    so traces carry which prompt version (and source) produced them.
+    Returns True only when the line landed, False on any swallowed failure or
+    an id-less body - the batch receipt marks 'fetched' on this signal alone
+    (round 120101 LOW), so a transient feed failure stays retryable."""
+    try:
+        gid = (resp or {}).get("id")
+        if not gid:
+            return False
+        path = os.environ.get("OROBS_FEED") or os.path.join(
+            os.path.expanduser("~"), ".openrouter-observability", "ids-feed.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        rec = {"id": gid, "model": model,
+               "ts": datetime.datetime.now(
+                   datetime.timezone.utc).isoformat(timespec="seconds"),
+               "caller": "adversary-gate"}
+        if prompt_meta:
+            # round 210112 finding 3: source/mode ride the feed so mirrored
+            # traces slice by initiation point, not just prompt name
+            rec["prompt"] = dict(prompt_meta)
+            rec["prompt"]["source"] = "gate"
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+        return True
+    except Exception:
+        return False
+
+
+def _call_one_model(entry, user_content, timeout=1200, *, reasoning=None, max_tokens=None):
     fake = os.environ.get("ADVERSARY_FAKE")               # selftests only - no network
     if fake:
         root = os.path.basename(_repo_root())
@@ -1360,6 +1760,33 @@ def _call_one_model(entry, user_content, timeout=1200):
             raise SystemExit("ADVERSARY GATE: provider pins apply to OpenRouter entries only "
                              "(%r routes to the local endpoint)" % entry)   # shape - a pin would be a lie
         return _call_local(model[len("local:"):], user_content, timeout)
+    # PROMPT LAYER (owner order 2026-10-12): the system prompt is managed in
+    # Langfuse (name gate/adversary-review, label production) via the separate
+    # prompt-layer module - the gate depends on it ONE-WAY and the store can
+    # be swapped without touching gate logic. Fail-open THROUGHOUT (round
+    # 203717 finding 2): a missing module, a broken store, ANY layer error
+    # degrades to the built-in PROMPT - the gate never crashes on the layer.
+    # GENERATION POLICY (round 204933 finding 1): prompt-layer is deliberately
+    # NOT in runtime_loader._SUITE_FILES - adding it mid-flight desyncs every
+    # installed generation's manifest and self-deadlocks the machine-wide
+    # launcher (catalog != manifest -> RuntimeDenied on every hook). Installed
+    # generations run the built-in PROMPT via this try/except until a future
+    # owner-ordered generation CUT ships the layer in the same rebuild.
+    _sys_prompt, _prompt_meta = PROMPT, None
+    try:
+        _suite_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if os.path.join(_suite_root, "prompt-layer") not in sys.path:
+            sys.path.insert(0, os.path.join(_suite_root, "prompt-layer"))
+        import prompt_layer as _pl
+        _sys_prompt, _prompt_meta = _pl.get_prompt(
+            "gate/adversary-review", source="gate",
+            builtin=PROMPT, cache_ttl_seconds=_env_int("ADVERSARY_PROMPT_TTL", 300))
+        global _LAST_PROMPT_META
+        _LAST_PROMPT_META = _prompt_meta
+    except Exception as _ple:
+        sys.stderr.write("adversary gate: prompt layer degraded to builtin (%s)\n"
+                         % str(_ple)[:120])
+
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not key:
         raise SystemExit("ADVERSARY GATE: OPENROUTER_API_KEY not set - the gate cannot run. "
@@ -1368,12 +1795,17 @@ def _call_one_model(entry, user_content, timeout=1200):
         if order:
             raise SystemExit("ADVERSARY GATE: batch reviews use the batch model route without interactive pins")
         try:
-            return _call_batch_model(model, user_content, key, timeout=timeout)
+            return _call_batch_model(model, user_content, key, timeout=timeout,
+                                     reasoning=reasoning, max_tokens=max_tokens,
+                                     sys_prompt=_sys_prompt, prompt_meta=_prompt_meta)
         except (OSError, http.client.HTTPException, ValueError, TypeError, KeyError) as exc:
             raise SystemExit("ADVERSARY GATE: batch transport failed closed; saved jobs retained: " + str(exc))
-    body = {"model": model, "temperature": 0.2, "max_tokens": _output_token_budget(user_content),
-            "messages": [{"role": "system", "content": PROMPT},
+    body = {"model": model, "temperature": 0.2,
+            "max_tokens": max_tokens if max_tokens is not None else _output_token_budget(user_content),
+            "messages": [{"role": "system", "content": _sys_prompt},
                          {"role": "user", "content": user_content}]}
+    if reasoning:
+        body["reasoning"] = reasoning
     if order:
         body["provider"] = {"order": order, "allow_fallbacks": False}
     req = urllib.request.Request(
@@ -1413,26 +1845,73 @@ def _call_one_model(entry, user_content, timeout=1200):
             # above (it subclasses OSError) so its 429 retry is unaffected.
             raise SystemExit("ADVERSARY GATE: network/read error reaching OpenRouter: %r"
                              % (getattr(e, "reason", e),))
+    _orobs_feed(d, model, prompt_meta=_prompt_meta)   # id feed for the observability poller (fail-open)
     return _parse_completion(d)
 
 
 def _call_batch_model(model, user_content, key, transport=None, sleep=time.sleep,
-                      timeout=1200, clock=time.monotonic):
-    """Use the existing batch API; persist the paid job before waiting for its verdict."""
+                      timeout=1200, clock=time.monotonic, *, reasoning=None, max_tokens=None,
+                      sys_prompt=PROMPT, prompt_meta=None):
+    """Use the existing batch API; persist the paid job before waiting for its verdict.
+    RESUME IDENTITY (round 210929 MEDIUM): the receipt is keyed on the FULL
+    request body INCLUDING the resolved system prompt - a resume attempt that
+    resolves a different prompt text (store back up, re-seed, builtin-vs-store
+    across source/generation layouts) would otherwise miss the receipt and
+    BUY A SECOND batch while the first stays pending. The resolved prompt is
+    therefore persisted alongside the receipt and re-used verbatim on resume."""
     suite = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if suite not in sys.path:
         sys.path.insert(0, suite)
     from autoland.scan_queue import LiveBatchTransport
     tx = transport or LiveBatchTransport()
     deadline = clock() + timeout
+    req_body = {"temperature": 0.2,
+                "max_tokens": max_tokens if max_tokens is not None else _output_token_budget(user_content),
+                "messages": [{"role": "system", "content": sys_prompt},
+                             {"role": "user", "content": user_content}]}
+    if reasoning:
+        req_body["reasoning"] = reasoning
     body = {"endpoint": "/v1/chat/completions", "model": model,
-            "requests": [{"custom_id": "scan", "body": {"temperature": 0.2,
-                "max_tokens": _output_token_budget(user_content),
-                "messages": [{"role": "system", "content": PROMPT},
-                             {"role": "user", "content": user_content}]}}]}
+            "requests": [{"custom_id": "scan", "body": req_body}]}
+    # resume identity (round 212816 MEDIUM): the sidecar must key on a
+    # PROMPT-INDEPENDENT digest (model+payload+params, everything except the
+    # system prompt) - keying on the full-request sha can only find the
+    # sidecar when the prompt is UNCHANGED, exactly the no-op case; a drifted
+    # prompt must still find the original job and replay its exact bytes
+    core_sha = hashlib.sha256(json.dumps(
+        [model, user_content, "reasoning" if reasoning else "",
+         max_tokens if max_tokens is not None else -1]).encode("utf-8")).hexdigest()
+    root = _repo_root()
+    persisted_prompt = os.path.join(_adv_dir(root), "batch-review-core-%s.prompt" % core_sha)
+    if os.path.isfile(persisted_prompt):
+        try:
+            with open(persisted_prompt, encoding="utf-8") as fh:
+                req_body["messages"][0]["content"] = fh.read()
+        except (OSError, ValueError, IndexError):
+            pass
+    # gate round 112721 LOW-2: the meta fed must describe the bytes SENT. On a
+    # resume those are the persisted sidecar, not this call's resolution, so the
+    # submission-time meta is persisted beside it (below) and replayed here; a
+    # legacy sidecar or an unreadable meta attributes NOTHING rather than
+    # fabricating a version the generation did not run with.
+    feed_meta = prompt_meta
+    meta_name = "batch-review-core-%s.meta.json" % core_sha
+    if os.path.isfile(persisted_prompt) and req_body["messages"][0]["content"] != sys_prompt:
+        feed_meta = None
+        try:
+            with open(os.path.join(_adv_dir(root), meta_name), encoding="utf-8") as fh:
+                persisted_meta = json.load(fh)
+            if isinstance(persisted_meta, dict):
+                feed_meta = persisted_meta
+        except (OSError, ValueError):
+            feed_meta = None
+    if feed_meta is not prompt_meta:
+        # keep the round-header note (artifact_round reads _LAST_PROMPT_META)
+        # aligned with the bytes actually sent, not this call's resolution
+        global _LAST_PROMPT_META
+        _LAST_PROMPT_META = feed_meta
     raw = json.dumps(body).encode("utf-8")
     request_sha = hashlib.sha256(raw).hexdigest()
-    root = _repo_root()
     receipt_name = "batch-review-" + request_sha + ".json"
     receipt_path = os.path.join(_adv_dir(root), receipt_name)
     adv = _adv_dir(root)
@@ -1453,6 +1932,19 @@ def _call_batch_model(model, user_content, key, transport=None, sleep=time.sleep
             intent = {"request_sha256": request_sha, "model": model,
                       "batch_id": None, "submission": "in_flight"}
             _save_json(root, receipt_name, intent)  # Durable BEFORE the acceptance window.
+            # resume identity: persist the resolved prompt BEFORE submission so
+            # any later attempt replays these exact bytes (see docstring)
+            try:
+                with open(persisted_prompt, "w", encoding="utf-8") as fh:
+                    fh.write(req_body["messages"][0]["content"])
+                if feed_meta is not None:
+                    # feed_meta, not prompt_meta: on a rejected-receipt retry the
+                    # bytes being persisted are the sidecar's, so their meta (the
+                    # one read above) is what must survive, not this call's
+                    # resolution
+                    _save_json(root, meta_name, dict(feed_meta))
+            except OSError:
+                pass
             try:
                 job = tx._req("POST", "https://openrouter.ai/api/v1/batches", key, raw)
             except urllib.error.HTTPError as exc:
@@ -1530,6 +2022,23 @@ def _call_batch_model(model, user_content, key, transport=None, sleep=time.sleep
                 raise SystemExit("ADVERSARY GATE: batch output response must be an object")
             if response.get("status_code", 200) != 200:
                 raise SystemExit("ADVERSARY GATE: batch review returned an error response")
+            # Batch results carry per-request generation ids (gen-batch-...; owner
+            # correction 2026-10-13) - feed them so daily audits reach the OROBS
+            # pipeline at drain time instead of only via analytics backfill.
+            # gate round 112721 LOW-1: the receipt remembers the feed so a byte-
+            # identical replay (the drain's recovery moves queue files back)
+            # re-parses the same completed batch WITHOUT a second feed line.
+            # Round 120101 LOW: the mark is written ONLY on a confirmed feed -
+            # a transiently failed feed stays unmarked so the replay retries
+            # the line instead of skipping it forever.
+            if not receipt.get("fetched"):
+                if _orobs_feed(response.get("body"), model, prompt_meta=feed_meta):
+                    try:
+                        _save_json(root, receipt_name, {"request_sha256": request_sha,
+                                                       "model": model, "batch_id": batch_id,
+                                                       "fetched": True})
+                    except Exception:
+                        pass
             return _parse_completion(response.get("body"))
         if state in {"failed", "expired", "cancelled"}:
             raise SystemExit("ADVERSARY GATE: batch review failed closed with state " + state)
@@ -2104,6 +2613,14 @@ def _tier_split(model):
     return entries[:n1], entries[n1:]
 
 
+def _tier2_in_play(model):
+    """True only when the DEFAULT chain's tier-2 segment is in play; a manual
+    override (or TIER1_OFF) runs single-tier VERBATIM, never restyled - the
+    split's second list is non-empty in BOTH cases (0.3.9 review 2026-10-24)."""
+    return (model == DEFAULT_CHAIN
+            and os.environ.get("ADVERSARY_TIER1_OFF", "0") != "1")
+
+
 def _tier1_eligible(payload, files, removals, context, blobs):
     """Quick-rung eligibility: small payloads with no rebuttal, no removals, no gated
     prefixes and no oversize blobs - everything substantive rides the strong rung."""
@@ -2155,7 +2672,13 @@ def _spawn_audit_drain(root):
     try:
         log = open(os.path.join(_adv_dir(root), "audit_drain.log"), "a", encoding="utf-8")
         flags = (0x00000008 | 0x00000200) if os.name == "nt" else 0  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-        subprocess.Popen([sys.executable, os.path.abspath(__file__), "audit-drain",
+        # -B (round 121630): the spawn may execute the INSTALLED GENERATION copy
+        # (snapshot context __file__) as a plain script - without -B its
+        # filesystem imports write __pycache__ INTO the package and
+        # validate_generation refuses the active generation on every later
+        # launch ("Unreviewed files"). NOT -I: isolated mode strips the script
+        # dir and breaks the gate's sibling imports (adversary_audit et al).
+        subprocess.Popen([sys.executable, "-B", os.path.abspath(__file__), "audit-drain",
                           "--limit", "4"],
                          stdout=log, stderr=log, creationflags=flags, close_fds=True,
                          cwd=str(root))
@@ -2205,6 +2728,7 @@ def cmd_audit_drain(limit=4):
     # this drain (entries stay queued); only a POSITIVE delist blocks the run.
     if os.environ.get("ADVERSARY_SELFTEST") == "1":   # hermetic selftests -
         sys.stderr.write("adversary audit: catalog probe skipped (selftest hermetic mode).\n")
+        primary_delisted = os.environ.get("ADVERSARY_SELFTEST_PRIMARY_DELIST") == "1"
     else:
         try:
             key = os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -2214,13 +2738,24 @@ def cmd_audit_drain(limit=4):
                 catalog = json.loads(resp.read().decode("utf-8"))
             ids = {m.get("id") for m in catalog.get("data", [])}
             base = TIER2_AUDIT_MODEL.split(":")[0]
+            backup_base = TIER2_AUDIT_FALLBACK_MODEL.split(":")[0]
             # gate round gate_20261009-014204: the :batch suffix is ROUTING, not a
             # catalog id - this probe catches delisting of the UNDERLYING model (the
             # ds-pro incident); a base-listed-but-:batch-rejected submission is owned
             # downstream by the terminal rejected-receipt dead-letter path.
-            if base not in ids:
-                print("ADVERSARY AUDIT: model %s is NOT in the live catalog (delisted?) "
-                      "- drain SKIPPED, entries preserved; re-pin TIER2_AUDIT_MODEL." % base)
+            # 2026-10-12: a delisted PRIMARY no longer skips the drain when the
+            # backup rung is live - the item-level fallback carries the audit.
+            delisted = [m for m, b in ((TIER2_AUDIT_MODEL, base),
+                                       (TIER2_AUDIT_FALLBACK_MODEL, backup_base))
+                        if b not in ids]
+            primary_delisted = base not in ids
+            if primary_delisted and backup_base in ids:
+                print("ADVERSARY AUDIT: primary %s NOT in the live catalog (delisted?) "
+                      "- proceeding on backup %s." % (TIER2_AUDIT_MODEL, TIER2_AUDIT_FALLBACK_MODEL))
+            if len(delisted) >= 2 or (base not in ids and backup_base not in ids):
+                print("ADVERSARY AUDIT: audit models %s are NOT in the live catalog "
+                      "(delisted?) - drain SKIPPED, entries preserved; re-pin "
+                      "TIER2_AUDIT_MODEL." % ", ".join(delisted))
                 return 1
         except Exception as exc:
             sys.stderr.write("adversary audit: catalog probe unavailable (%s) - degrading - drain SKIPPED, entries stay queued "
@@ -2283,10 +2818,44 @@ def cmd_audit_drain(limit=4):
                 print("adversary audit: unreadable queue entry %s (%s) - skipping."
                       % (name, str(exc)[:100]))
                 continue
+            audit_model_used = TIER2_AUDIT_MODEL
             try:
-                text, usage, provider = _call_one_model(
-                    TIER2_AUDIT_MODEL, payload,
-                    _env_int("ADVERSARY_AUDIT_TIMEOUT", 3600))
+                try:
+                    text, usage, provider = _call_one_model(
+                        TIER2_AUDIT_MODEL, payload,
+                        _env_int("ADVERSARY_AUDIT_TIMEOUT", 3600),
+                        reasoning=_tier2_reasoning(),
+                        max_tokens=_tier2_output_token_budget(payload))
+                except BatchReviewPending:
+                    # MUST propagate: a pending primary job is a live paid
+                    # submission - resubmitting would double-bill. Note
+                    # BatchReviewPending SUBCLASSES SystemExit, so the clause
+                    # order here is load-bearing (gate round 20261012-122708
+                    # finding 1: the old inner `except SystemExit` caught it
+                    # first and the fallback paid a second batch).
+                    raise
+                except SystemExit as exc:
+                    # OWNER ORDER 2026-10-12: one backup rung INSIDE the price
+                    # ceiling - when the catalog probe positively established
+                    # the primary is delisted. BatchReviewPending propagates
+                    # above (a live paid job always resumes - never a second
+                    # submission). A delisted primary may still own a SUNK
+                    # TERMINAL receipt (failed/expired job from before the
+                    # delist); the backup still serves - the audit must complete
+                    # and the sunk cost is unrecoverable either way. Accepted
+                    # per-event cost of that window: one extra batch, <= ~$0.11
+                    # (gate round 130726 finding 2, adjudicated as designed).
+                    if not primary_delisted:
+                        raise
+                    print("adversary audit: primary %s terminally failed (%s) and is "
+                          "delisted - serving on backup %s"
+                          % (TIER2_AUDIT_MODEL, str(exc)[:120], TIER2_AUDIT_FALLBACK_MODEL))
+                    audit_model_used = TIER2_AUDIT_FALLBACK_MODEL
+                    text, usage, provider = _call_one_model(
+                        TIER2_AUDIT_FALLBACK_MODEL, payload,
+                        _env_int("ADVERSARY_AUDIT_TIMEOUT", 3600),
+                        reasoning=_tier2_reasoning(),
+                        max_tokens=_tier2_output_token_budget(payload))
             except BatchReviewPending as exc:
                 pending += 1
                 print("adversary audit: %s still pending - kept for resume (%s)"
@@ -2310,7 +2879,11 @@ def cmd_audit_drain(limit=4):
                     stream.write(json.dumps({
                         "when": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
                         "queued": meta["queued"], "tree": meta.get("tree"),
-                        "model": TIER2_AUDIT_MODEL, "outcome": "REJECTED",
+                        # round 035426 MEDIUM 2: the audited file set rides
+                        # the dead-letter row too - coverage matching must
+                        # work for REJECTED, not only for verdict rows
+                        "files": meta.get("files"),
+                        "model": audit_model_used, "outcome": "REJECTED",
                         "text_head": str(exc)[:500]}) + "\n")
                 print("adversary audit: %s terminally rejected - dead-lettered to "
                       "audit_queue/dead/ (an evidence row was written; move the "
@@ -2321,10 +2894,34 @@ def cmd_audit_drain(limit=4):
                 # single authority (F8/F17 divergence class)
                 if not _warn_proven_low(text, meta.get("files") or []):
                     outcome = "BLOCK"
+            # 20261022-010425 class (found in the w6 EV-263 adjudication):
+            # the drain's OWN review is the evidence for its verdict - it
+            # was never persisted (only the 2000-char text_head preview),
+            # and the row's "artifact" named the COMMIT GATE's review
+            # (meta's artifact), which reads CLEAR exactly when the drain
+            # BLOCKs. Persist the full review under an audit_-prefixed
+            # name (can never collide with gate_* artifacts) BEFORE the
+            # row lands, and keep the commit-gate review as gate_artifact
+            # provenance. No machine consumer reads these fields (the
+            # warning counter and the push guard match tree/files/when).
+            reviews_dir = os.path.join(_adv_dir(root), "reviews")
+            os.makedirs(reviews_dir, exist_ok=True)
+            audit_art = os.path.join(
+                reviews_dir, "audit_%s.md" % meta["queued"])
+            with open(audit_art, "w", encoding="utf-8") as stream:
+                stream.write(text if text.endswith("\n") else text + "\n")
             row = {"when": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
                    "queued": meta["queued"], "tree": meta.get("tree"),
-                   "artifact": meta.get("artifact"),
-                     "model": TIER2_AUDIT_MODEL, "provider": str(provider),
+                   # round 033733 MEDIUM: the audited FILE SET rides the row -
+                   # the ship gate matches commits by file coverage, because
+                   # the enqueued tree (reviewed snapshot) need not equal any
+                   # commit tree (partial staging lands a subset commit)
+                   "files": meta.get("files"),
+                   "artifact": audit_art,
+                   # provenance ONLY - the tier-1 clearance review this
+                   # audit sampled; NOT the evidence for this verdict
+                   "gate_artifact": meta.get("artifact"),
+                     "model": audit_model_used, "provider": str(provider),
                    "outcome": outcome if outcome in ("CLEAR", "WARN", "BLOCK") else "BLOCK",
                    "text_head": text[:2000]}
             with open(os.path.join(_adv_dir(root), "audit_findings.jsonl"), "a",
@@ -2362,13 +2959,103 @@ def _pregate_run(cmd, src):
         return None
 
 
+def _pregate_biome_parse(f, src, root=None):
+    """biome parse verdict for one staged js-family blob: a list of parse
+    diagnostic strings ([] = clean) or None when the layer must degrade.
+
+    biome 2.5.15 broke `check` in stdin mode: exit 1 "The contents aren't
+    fixed" UNCONDITIONALLY and diagnostics are never emitted (valid or broken,
+    disable-flags or not) - the retired rc!=0 + /pars/i heuristic then matched
+    JSON.parse in the ECHOED SOURCE and false-blocked valid .mjs (EV-124,
+    2026-10-17). Path mode + --reporter=json still reports real parse
+    diagnostics; classify ONLY on category == "parse" (lint/format findings
+    and exit codes can never refuse), and capture the diagnostic, never
+    echoed source lines. A biome.json/biome.jsonc at the repo root keeps its
+    authority over the probe via --config-path (round-2 WARN finding on
+    403e169: the old stdin invocation resolved the repo's config through
+    cwd, and silently dropping it would let defaults parse files the repo
+    config scopes differently; a config that excludes the probe leaves the
+    0-files guard to degrade loud). The repo root arrives as a PARAMETER from
+    _local_pregate (round-3 finding on d78e99b: _repo_root()/_run_git fails
+    via SystemExit - uncatchable by `except Exception` - and would falsify
+    _local_pregate's no-git-I/O invariant; the check performs none)."""
+    import shutil
+    import tempfile
+    exe = shutil.which("biome")
+    if not exe:
+        return None
+    cfg = None
+    if root:
+        for _cand in ("biome.json", "biome.jsonc"):
+            if os.path.isfile(os.path.join(root, _cand)):
+                cfg = root
+                break
+    base = os.path.basename(f) or "probe.mjs"
+    if not base.lower().endswith((".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs")):
+        base += ".mjs"              # defensive: keep biome's module detection
+    try:
+        with tempfile.TemporaryDirectory(prefix="advbiome_") as td:
+            probe = os.path.join(td, base)
+            with open(probe, "w", encoding="utf-8", newline="") as fh:
+                fh.write(src)
+            cmd = [exe, "check", "--reporter=json"]
+            if cfg:
+                cmd.append("--config-path=" + cfg)
+            cmd.append(probe)
+            try:
+                r = subprocess.run(cmd,
+                                   cwd=td, capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace",
+                                   timeout=_PREGATE_TOOL_TIMEOUT_S)
+            except (subprocess.TimeoutExpired, OSError):
+                return None
+            out = r.stdout or ""
+    except OSError:
+        return None
+    start = out.find("{")
+    if start < 0:
+        sys.stderr.write("adversary gate: pre-gate biome output unclassifiable "
+                         "(no JSON on stdout) - degraded; the model reviewer "
+                         "still runs.\n")
+        return None
+    try:
+        data, _ = json.JSONDecoder().raw_decode(out, start)
+        if not isinstance(data, dict):
+            raise ValueError("not an object")
+    except ValueError:
+        sys.stderr.write("adversary gate: pre-gate biome output unclassifiable "
+                         "(stdout is not JSON) - degraded; the model reviewer "
+                         "still runs.\n")
+        return None
+    hits = []
+    for d in data.get("diagnostics") or []:
+        if isinstance(d, dict) and d.get("category") == "parse":
+            st = ((d.get("location") or {}).get("start") or {})
+            hits.append("%s (line %s col %s)"
+                        % (str(d.get("message", "parse error"))[:160],
+                           st.get("line", "?"), st.get("column", "?")))
+    if hits:
+        return hits[:2]
+    summary = data.get("summary") or {}
+    if (isinstance(summary, dict)
+            and (summary.get("unchanged", 0) or 0)
+            + (summary.get("changed", 0) or 0) < 1):
+        sys.stderr.write("adversary gate: pre-gate biome processed 0 files "
+                         "(probe path ignored?) - degraded; the model reviewer "
+                         "still runs.\n")
+        return None
+    return []
+
+
 def _pbt_pregate(files):
     """T1.2 (owner order 2026-10-08): opt-in property-suite rung. Runs the
     hypothesis battery when staged code touches the gate engine or the suite
     itself; blocks ONLY on a real pytest failure (rc != 0 - a property failure
     is a violated invariant by construction); absent tools or a timeout degrade
-    loud and never block. ADVERSARY_PREGATE_PBT=1 enables (default off)."""
-    if os.environ.get("ADVERSARY_PREGATE_PBT", "0") != "1":
+    loud and never block. OWNER ORDER 2026-10-12: PERMANENTLY ON by default
+    (found wired-but-never-enabled; nothing on the machine set the flag, so the
+    live gate had never run the battery). ADVERSARY_PREGATE_PBT=0 opts out."""
+    if os.environ.get("ADVERSARY_PREGATE_PBT", "1") != "1":
         return None
     if not any(f == "adversary-gate/adversary_gate.py" or f.startswith("tests/properties/")
                for f in files):
@@ -2389,9 +3076,23 @@ def _pbt_pregate(files):
                              % _mod)
             return None
     try:
+        # SCRUB the frozen-review git env: cmd_run runs this battery with
+        # GIT_INDEX_FILE pointing at its scratch review index; a battery that
+        # inherits it misdirects every git operation in temp-repo properties
+        # (caught live by the first default-on battery run, 2026-10-12: P7
+        # failed ONLY under the gate's nested invocation). Round 153611
+        # finding 3: scrub the FULL git-context set the dispatchers scrub -
+        # `git -c ...` invocations export GIT_CONFIG_PARAMETERS/COUNT into the
+        # child and would misdirect temp-repo git the same way.
+        _git_env_scrub = ("GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE",
+                          "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_OBJECT_DIRECTORY",
+                          "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES",
+                          "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT")
+        battery_env = {k: v for k, v in os.environ.items()
+                       if k not in _git_env_scrub}
         r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
                             "tests/properties"], cwd=root, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace",
+                           encoding="utf-8", errors="replace", env=battery_env,
                            timeout=_env_int("ADVERSARY_PREGATE_PBT_TIMEOUT", 120))
     except subprocess.TimeoutExpired:
         sys.stderr.write("adversary gate: property battery TIMEOUT - degraded "
@@ -2414,7 +3115,7 @@ _PREGATE_CACHE_MAX = 2000
 # cached pass was produced by an older logic and must not survive the change
 # (gate round gate_20261009-085308 MEDIUM: tools+epoch keying alone goes stale
 # when the gate's own logic evolves).
-_PREGATE_LOGIC_VERSION = "1"
+_PREGATE_LOGIC_VERSION = "3"   # 3 = biome probe honors repo config via root param (2026-10-17); 2 = JSON parse-diagnostic classification
 _TOOL_VERSIONS = None   # per-process memo
 
 
@@ -2482,9 +3183,11 @@ def _pregate_cache_save(root, epoch, entries):
         pass
 
 
-def _pregate_check_one(f, src):
+def _pregate_check_one(f, src, root=None):
     """One file's deterministic checks (T4.2: runs inside a worker thread).
-    Returns (fails[list], degraded[set]) - order-independent, no shared state."""
+    Returns (fails[list], degraded[set]) - order-independent, no shared state.
+    `root` (the repo root, when known) reaches only the biome config probe;
+    this function performs no git I/O of its own."""
     fails, degraded = [], set()
     low = f.lower()
     if low.endswith(".py"):
@@ -2508,14 +3211,11 @@ def _pregate_check_one(f, src):
                     if re.search(r"\bE9\d{2}\b", ln)][:3]
             fails.extend("ruff %s" % h[:180] for h in hits)
     elif low.endswith((".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs")):
-        r = _pregate_run(["biome", "check", "--linter-enabled=false",
-                          "--formatter-enabled=false", "--assist-enabled=false",
-                          "--stdin-file-path=" + f], src)
-        if r is None:
+        parse_hits = _pregate_biome_parse(f, src, root)
+        if parse_hits is None:
             degraded.add("biome")
-        elif r[0] != 0 and re.search(r"pars", (r[1] + r[2]), re.I):
-            first = [ln for ln in (r[1] + r[2]).splitlines() if ln.strip()][:2]
-            fails.append("biome-parse %s: %s" % (f, " / ".join(first)[:200]))
+        else:
+            fails.extend("biome-parse %s: %s" % (f, h) for h in parse_hits)
     elif low.endswith(".json"):
         try:
             json.loads(src)
@@ -2574,10 +3274,10 @@ def _local_pregate(files, blobs, root=None):
         from concurrent.futures import ThreadPoolExecutor
         workers = min(4, len(to_check))
         if workers <= 1:
-            results = [_pregate_check_one(f, src) for f, src in to_check]
+            results = [_pregate_check_one(f, src, root) for f, src in to_check]
         else:
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                results = list(ex.map(lambda pair: _pregate_check_one(*pair),
+                results = list(ex.map(lambda pair: _pregate_check_one(pair[0], pair[1], root),
                                       to_check))
     else:
         results = []
@@ -2898,12 +3598,24 @@ def _cmd_run_snapshot(model, context):
 
     def artifact_round(mdl, usg, prv, body_text):
         """One durable review round (atomic name + sidecar, owner order 2026-09-21);
-        returns (artifact, ts). A total persistence failure raises to the caller."""
+        returns (artifact, ts). A total persistence failure raises to the caller.
+        Round 210929 LOW: the header records WHICH prompt produced the verdict
+        (name@version, origin) so audits can tell store-text from builtin
+        reviews - non-reproducible posture is at least attributable."""
         ts_r = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        prompt_note = ""
+        try:
+            pm = _LAST_PROMPT_META or {}
+            if pm.get("name"):
+                prompt_note = " | prompt: %s@%s (%s)" % (
+                    pm.get("name"), pm.get("version"), pm.get("origin"))
+        except Exception:
+            pass
         try:
             return _write_review_round(root, ts_r,
                                        _review_header(mdl, usg, prv,
-                                                      len(scrubbed), files) + body_text,
+                                                      len(scrubbed), files).replace(
+                                           " | caller:", prompt_note + " | caller:") + body_text,
                                        _staged_keys(), bool(context.strip()),
                                        tier=tier, tier_reason=tier_reason), ts_r
         except _ReviewRoundPartial as exc:
@@ -2924,7 +3636,8 @@ def _cmd_run_snapshot(model, context):
               % (len(payload), TIER1_MAX_CHARS))
         try:
             text, usage, used_model, provider = _call_model_ex(
-                ",".join(tier1_chain), payload, TIER1_TIMEOUT_S)
+                ",".join(tier1_chain), payload, TIER1_TIMEOUT_S,
+                jev_backstop=True)
         except SystemExit as exc:
             print("adversary gate: tier-1 reviewer unavailable (%s) - escalating to "
                   "the strong rung; a dead rung never clears." % str(exc)[:180])
@@ -2960,8 +3673,15 @@ def _cmd_run_snapshot(model, context):
                   "[the deepseek pins read provider prompt-cache at real size; the large or "
                   "repeating prefix rides them cheaply]"
                   % (_split_entry(route.split(",")[0])[0], routing_why, len(payload)))
+        # round 132223: an EXPLICIT override runs VERBATIM - never restyle it
+        # with the tier-2 effort/budget. tier2_chain TRUTHINESS cannot tell the
+        # cases apart (a manual override's split returns ([], whole)) - ask the
+        # predicate itself (marketplace 0.3.9 review MEDIUM 2026-10-24).
+        tier2_kw = ({"reasoning": _tier2_reasoning(),
+                     "max_tokens": _tier2_output_token_budget(payload)}
+                    if _tier2_in_play(model) else {})
         text, usage, used_model, provider = _call_model_ex(
-            route, payload, TIER2_TIMEOUT_S)
+            route, payload, TIER2_TIMEOUT_S, jev_backstop=True, **tier2_kw)
         if not text.rstrip().splitlines():        # adversary finding (birth review): an
             text = "(model returned no content - failing closed)\nVERDICT: BLOCK"
             # substituted BEFORE the artifact write so the on-disk round carries the
@@ -2991,7 +3711,22 @@ def _cmd_run_snapshot(model, context):
     print(text)
     print("\n=== adversary gate: %s | tier %d | artifact: %s" % (verdict, tier, art))
     if verdict == "BLOCK":
-        _print_finding_adjudication(root, art, text, files, blobs, diff)
+        refuted_all = _print_finding_adjudication(root, art, text, files, blobs, diff)
+        if refuted_all:
+            # OWNER ORDER 2026-10-12 (the adjudicator upgrade; the corpus
+            # basis the module docstring demanded now exists - EV-201/202/203
+            # plus this week's rounds): a BLOCK resting ENTIRELY on
+            # anchor-refuted findings (NO_ANCHOR / UNRESOLVED_FILE - the
+            # fabrication signatures) no longer counts as a review verdict at
+            # all. Fail CLOSED: no clearance is written and no auto-CLEAR is
+            # granted - a deterministic layer never authorizes a commit - but
+            # the author is NOT sent to remediate fabrications either; the
+            # round is recorded and the review re-runs.
+            print("ADVERSARY GATE: the BLOCK rested entirely on anchor-refuted "
+                  "(fabrication-signature) findings - clearance NOT written and no "
+                  "remediation owed; re-run the review. The dispositions are "
+                  "recorded in the adjudication evidence.")
+            return 1
         print("Address the findings (or re-run with --context carrying a factual rebuttal).")
         return 1
     clear = _load_clear(root)
@@ -3223,7 +3958,8 @@ def _push_secret_audit(revs, doc_revs=None):
     return hard, soft, "\n".join(doc_lines)
 
 
-def _push_secret_barrier(lref, revs, anchors, remote_known, doc_revs=None):
+def _push_secret_barrier(lref, revs, anchors, remote_known, doc_revs=None,
+                         owner_override=""):
     """EV-046 (owner ruling 2026-09-07, 'instead of blocking on commit, force a git scan
     before each push'): the barrier commit time no longer provides. A HARD literal in any
     outgoing commit REFUSES the push - a hook cannot scrub history, so the recipe rewrites
@@ -3249,9 +3985,14 @@ def _push_secret_barrier(lref, revs, anchors, remote_known, doc_revs=None):
                    "them: rotate the value and the owner rules.\n")
     recipe += "\n"
     if hard:
-        sys.stderr.write("\nADVERSARY PUSH GUARD: push of %s REFUSED - outgoing commit(s) carry a "
-                         "secret LITERAL (values not printed):\n%s\n%s" % (lref, rows(hard), recipe))
-        return 1
+        if owner_override:
+            sys.stderr.write("\nADVERSARY PUSH GUARD: OWNER PUSH OVERRIDE - outgoing commit(s) "
+                             "carry a secret LITERAL (values not printed); the owner's ruling "
+                             "lets this push through with a WARNING:\n%s\n" % rows(hard))
+        else:
+            sys.stderr.write("\nADVERSARY PUSH GUARD: push of %s REFUSED - outgoing commit(s) carry a "
+                             "secret LITERAL (values not printed):\n%s\n%s" % (lref, rows(hard), recipe))
+            return 1
     if doc_text.strip():
         try:
             res = (docscan.scan_segmented(
@@ -3260,11 +4001,17 @@ def _push_secret_barrier(lref, revs, anchors, remote_known, doc_revs=None):
         except (Exception, SystemExit) as e:
             res = {"status": "degraded", "detail": "docs scan crashed: %s" % (str(e)[:150])}
         if res["status"] == "block":
-            sys.stderr.write("\nADVERSARY PUSH GUARD: push of %s REFUSED - the local docs reviewer "
-                             "flagged secret material in outgoing documentation (%s). Values are "
-                             "not printed; find it in the outgoing doc lines. %s"
-                             % (lref, res.get("detail", ""), recipe))
-            return 1
+            if owner_override:
+                sys.stderr.write("\nADVERSARY PUSH GUARD: OWNER PUSH OVERRIDE - the local docs "
+                                 "reviewer flagged secret material in outgoing documentation "
+                                 "(%s); the owner's ruling lets this push through with a "
+                                 "WARNING.\n" % res.get("detail", ""))
+            else:
+                sys.stderr.write("\nADVERSARY PUSH GUARD: push of %s REFUSED - the local docs reviewer "
+                                 "flagged secret material in outgoing documentation (%s). Values are "
+                                 "not printed; find it in the outgoing doc lines. %s"
+                                 % (lref, res.get("detail", ""), recipe))
+                return 1
         if res["status"] == "degraded":
             sys.stderr.write("adversary push guard: docs SEMANTIC scan SKIPPED (%s) - outgoing "
                              "docs got the pattern floor only.\n" % res.get("detail", ""))
@@ -3443,13 +4190,19 @@ _GNAME_RE = re.compile(r"gate_(\d{8}-\d{6})(?:-(\d+))?\.md$")
 
 def _print_finding_adjudication(root, art, text, files, blobs, diff):
     """Experiment #10 transfer (owner order 2026-10-10): anchor-normalize the
-    findings of a BLOCK review and persist the dispositions as evidence. The
-    external reviewer's verdict stays the commit authority - this layer
-    ANNOTATES, never rules (measured basis and the one-line upgrade path live
-    in finding_adjudicator's module docstring; ADVERSARY_ADJUDICATE_OFF=1
-    skips it entirely)."""
+    findings of a BLOCK review and persist the dispositions as evidence.
+    OWNER ORDER 2026-10-12 (the upgrade): returns True when EVERY finding is
+    anchor-refuted (NO_ANCHOR / UNRESOLVED_FILE) - the caller then treats the
+    BLOCK as verdict-void (fail-closed re-review; never an auto-CLEAR).
+    ADVERSARY_ADJUDICATE_OFF=1 skips it entirely."""
     if os.environ.get("ADVERSARY_ADJUDICATE_OFF", "0") == "1":
-        return
+        return False
+    if not files:
+        # gate round 153611 finding 1 (MEDIUM): a pure-removal review has NO
+        # staged bytes to anchor against - every finding would land
+        # UNRESOLVED_FILE/NO_ANCHOR by construction. The void applies only
+        # when there are staged code files the findings failed to cite.
+        return False
     try:
         import finding_adjudicator
         res = finding_adjudicator.adjudicate_review(text, files, blobs, diff)
@@ -3461,9 +4214,18 @@ def _print_finding_adjudication(root, art, text, files, blobs, diff):
         except Exception:
             pass                      # console annotation survives; persistence is best-effort
         print("\n=== " + finding_adjudicator.summary_line(res))
+        # upgrade (owner order 2026-10-12): verdict-void signal - every finding
+        # carries a fabrication-signature disposition (no anchor anywhere and
+        # no resolvable file). Findings with ANY surviving anchor keep the
+        # verdict regardless of ratio - the strike is conservative.
+        tot = res.get("totals") or {}
+        n = len(res.get("findings") or [])
+        return (n > 0
+                and tot.get("NO_ANCHOR", 0) + tot.get("UNRESOLVED_FILE", 0) == n)
     except Exception as exc:
         print("adversary gate: finding adjudication skipped (%s) - evidence-only "
               "layer, never verdict-affecting." % str(exc)[:120])
+        return False
 
 
 def _adjudicate_cycle(root, head, changed, clear, note_type, after=None):
@@ -3973,6 +4735,228 @@ def _has_remote_tracking_refs(remote):
     return bool(out.strip())
 
 
+def _unshippable_audits(root, revs):
+    """Daily-docket ship gate (owner order 2026-10-13): [(rev12, subject, reason)]
+    for outgoing commits not tier-2-batch-cleared. MATCHING IS BY FILE COVERAGE
+    (round 033733 MEDIUM): the audit is enqueued against the REVIEWED SNAPSHOT
+    tree, which need not equal any commit tree (partial staging lands a subset
+    commit), so a commit matches an audit when its changed-code files are a
+    non-empty subset of the audited file set; tree-exact match remains as the
+    legacy fallback for pre-file rows. Outcomes: QUEUED (in audit_queue/),
+    BLOCK (latest row per tree, unresolved), REJECTED (dead-lettered). WARN
+    lands by design; commits with no covering audit are excluded (tier-2
+    interactive / docs-only). Fail-open on the gate's own I/O - it never
+    blocks on its own read errors."""
+    def tree_of(rev):
+        try:
+            return _run_git(["rev-parse", rev + "^{tree}"]).strip()
+        except (Exception, SystemExit):          # _run_git fails via SystemExit
+            return ""
+    def files_of(rev):
+        try:
+            files, removals = _changed_code_in_commit(rev)
+            return set(files) | {k[2:] for k in removals}
+        except (Exception, SystemExit):
+            return set()
+    commits = {}                                 # rev -> (tree, files)
+    for rev in revs:
+        t_sha = tree_of(rev)
+        if t_sha:
+            commits[rev] = (t_sha, files_of(rev))
+    if not commits:
+        return []
+    trees = {t: rev for rev, (t, _f) in commits.items()}
+    out = []
+
+    def covered(entry_files, rev):
+        """Commit matches an audit by FILE COVERAGE: non-empty changed-code
+        set, all of it inside the audited set."""
+        ef = set(entry_files or [])
+        if not ef:
+            return False
+        return bool(commits[rev][1]) and commits[rev][1] <= ef
+
+    def subject_of(rev):
+        try:
+            return _run_git(["log", "-1", "--format=%s", rev]).strip()
+        except (Exception, SystemExit):
+            return ""
+
+    def report(rev, reason):
+        out.append("%s  %s  [%s]" % (rev[:12], subject_of(rev)[:52], reason))
+
+    # latest outcome + audited files per tree
+    latest_outcomes = {}
+    row_when = {}
+    audited_files = {}
+    try:
+        fpath = os.path.join(_adv_dir(root), "audit_findings.jsonl")
+        if os.path.isfile(fpath):
+            with open(fpath, encoding="utf-8") as fh:
+                for line in fh:
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    tr = row.get("tree")
+                    if isinstance(tr, str) and tr:
+                        latest_outcomes[tr] = row.get("outcome")
+                        rf = row.get("files")
+                        if isinstance(rf, list):
+                            audited_files[tr] = rf
+                        w = str(row.get("when") or "")
+                        try:
+                            row_when[tr] = datetime.datetime.strptime(
+                                w, "%Y%m%d-%H%M%S").timestamp()
+                        except ValueError:
+                            pass
+    except OSError:
+        pass
+    try:
+        # QUEUED: not yet run (a resolved findings row for the same audit
+        # reconciles it - round 031046 LOW 2)
+        qdir = os.path.join(_adv_dir(root), "audit_queue")
+        queued_files = []
+        if os.path.isdir(qdir):
+            for name in os.listdir(qdir):
+                if not name.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(qdir, name), encoding="utf-8") as fh:
+                        row = json.load(fh)
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(row, dict):
+                    continue          # foreign/tampered entry: skip, never crash the hook
+                q_tree = row.get("tree")
+                if not isinstance(q_tree, str) or not q_tree:
+                    continue          # unhashable/foreign value (round 023307 LOW 2)
+                if latest_outcomes.get(q_tree) in ("CLEAR", "WARN"):
+                    continue          # resolved - stale queue entry must not re-refuse
+                qf = row.get("files")
+                queued_files.append((q_tree, qf if isinstance(qf, list) else []))
+        # QUEUED union match (round 043459 MEDIUM): a commit assembled from
+        # files spanning SEVERAL tier-1 rounds is covered by the UNION of the
+        # pending audits, not by any single entry - the per-entry superset
+        # test let it through. At AUDIT_PCT=100 every tier-1-cleared file has
+        # a pending audit until it drains, so the union gates every file that
+        # passed through tier-1.
+        queued_union = set()
+        for _qt, qf in queued_files:
+            queued_union |= set(qf or [])
+        for rev in commits:
+            if covered(sorted(queued_union), rev):
+                report(rev, "audit QUEUED - not yet run")
+        # BLOCK / REJECTED: latest row per tree. TWO match classes:
+        # - TREE-EXACT (the audited tree IS the commit's tree): the audit
+        #   names this exact state - only a newer CLEAR/WARN row for the
+        #   same tree, or a resolved DESCENDANT in the push, clears it.
+        #   Notarization alone does NOT (round 035949: every outgoing code
+        #   commit is notarized by construction - a note exemption here made
+        #   the branch dead).
+        # - COVERAGE (commit files are a subset of the audited set; the
+        #   audited snapshot never landed as-is - partial staging): rounds
+        #   041533/042544 tightened this into a TIME rule - the coverage
+        #   match applies only to commits that EXISTED BEFORE the blocked
+        #   row was written (the smuggled-landing case: partial staging
+        #   commits, then the audit drains BLOCK). A commit made AFTER the
+        #   BLOCK is presumed to address it: it carries its own fresh
+        #   notarized review, and if that review was tier-1 its OWN audit
+        #   is queued and gates the push via the QUEUED branch. Notarization
+        #   filtering alone cannot work (round 042544 MEDIUM: the note audit
+        #   precedes this gate, so every code-changing rev is notarized and
+        #   the branch was dead).
+        blocked = {tr: o for tr, o in latest_outcomes.items()
+                   if o not in ("CLEAR", "WARN") and o is not None}
+        def commit_epoch(rev):
+            try:
+                return int(_run_git(["log", "-1", "--format=%ct", rev]).strip())
+            except (Exception, SystemExit):
+                return None
+
+        # per-rev time-gated UNION across blocked rows (round 043459): each
+        # file in a rev must be "accounted for" - either cleared by its own
+        # later row or inside a blocked row written AFTER the rev (the
+        # smuggled-landing rule generalized to spanning rounds)
+        blocked_union_matches = set()
+        for rev in commits:
+            rev_files = commits[rev][1]
+            if not rev_files:
+                continue
+            if latest_outcomes.get(commits[rev][0]) in ("CLEAR", "WARN"):
+                continue          # the rev's OWN tree carries a clean audit row
+            ce = commit_epoch(rev) or 0
+            # round 044646 HIGH: only files a time-gated BLOCKED row actually
+            # NAMES can block this rev - a commit whose files never intersect
+            # any blocked row (tier-2 interactive, unrelated paths) is
+            # EXCLUDED, per the docstring contract. needed starts EMPTY and
+            # GROWS from real intersections, never from untouched files.
+            touched_when = {}
+            for tr in blocked:
+                if tr in trees:
+                    continue                     # tree-exact handled below
+                af = set(audited_files.get(tr) or [])
+                if not af or not (rev_files & af):
+                    continue
+                rw = row_when.get(tr)
+                if rw is not None and ce < rw:
+                    for f in (rev_files & af):
+                        touched_when[f] = min(touched_when.get(f, rw), rw)
+            # a file is cleared ONLY by a CLEAR/WARN row written AFTER the
+            # blocked row that touched it (round 045602 MEDIUM 2: an older
+            # clean row for the same file must not launder a newer BLOCK)
+            def cleared_after(f, rw):
+                return any(latest_outcomes.get(tt) in ("CLEAR", "WARN")
+                           and f in set(audited_files.get(tt) or [])
+                           and (row_when.get(tt) is None
+                                or row_when.get(tt, 0) > rw)
+                           for tt in latest_outcomes)
+            leftover = {f for f, rw in touched_when.items()
+                        if not cleared_after(f, rw)}
+            if leftover:
+                blocked_union_matches.add(rev)
+        for tr in blocked:
+            tree_exact = [trees[tr]] if tr in trees else []
+            matched = tree_exact + [r for r in blocked_union_matches
+                                    if r not in tree_exact]
+            for rev in list(matched):
+                for other_rev, (ot, _of) in commits.items():
+                    if other_rev == rev:
+                        continue
+                    rw = row_when.get(tr)
+                    oe = commit_epoch(other_rev) or 0
+                    resolved = ((latest_outcomes.get(ot) in ("CLEAR", "WARN")
+                                 and (row_when.get(ot) is None
+                                      or rw is None
+                                      or row_when.get(ot, 0) > rw))
+                                or _git_ok(["notes", "--ref", NOTES_REF, "show", other_rev])
+                                and (rw is None or oe > rw))
+                    if resolved and _git_ok(["merge-base", "--is-ancestor", rev, other_rev]):
+                        matched.remove(rev)
+                        break
+            reason = ("audit REJECTED - dead-lettered; move "
+                      ".adversary/audit_queue/dead/<entry> back to "
+                      ".adversary/audit_queue/ and re-run drain "
+                      "(ADVERSARY_AUDIT_MODEL overrides the audit pin)"
+                      if latest_outcomes.get(tr) == "REJECTED"
+                      else "audit BLOCK unresolved")
+            for rev in matched:
+                report(rev, reason)
+    except OSError:
+        pass
+    # dedupe by rev prefix, keeping first
+    seen = set()
+    dedup = []
+    for row in out:
+        key = row.split()[0]
+        if key not in seen:
+            seen.add(key)
+            dedup.append(row)
+    return dedup
+
+
 def cmd_check_push(remote):
     """The pre-push PUSH GUARD (owner order 2026-08-31: notes are MANDATORY - a push
     is refused without them). Reads the pre-push stdin protocol (one line per ref:
@@ -3987,6 +4971,62 @@ def cmd_check_push(remote):
         return 0                                # our own notes push - never recurse
     root = _repo_root()
     zero = "0" * 40
+    # OWNER PUSH OVERRIDE (owner order 2026-10-24): Damien's written ruling in
+    # .adversary/PUSH_OVERRIDE relaxes the JUDGMENT barriers for ONE push
+    # (hard-secret, docs-model, daily-docket downgrade to warnings; consumed +
+    # logged to push_overrides.json). The un-notarized-history audit stays
+    # structural. Without Damien's explicit say-so using it is a violation.
+    push_ov = ""
+    _pov = os.path.join(_adv_dir(root), "PUSH_OVERRIDE")
+    if os.path.isfile(_pov):
+        try:
+            push_ov = open(_pov, encoding="utf-8", errors="replace").read().strip()[:2000]
+        except PermissionError as _re:
+            # unreadable (routine Windows sharing lock): the ruling still
+            # applies, logged with a placeholder reason (rounds 2-3 LOWs)
+            push_ov = "(unreadable reason file: %s)" % str(_re)[:100]
+        except OSError:
+            # vanished mid-read (concurrent consume / owner delete): no
+            # ruling exists - apply nothing, consume nothing
+            push_ov = None
+        if push_ov is None:
+            sys.stderr.write("ADVERSARY PUSH GUARD: PUSH_OVERRIDE disappeared mid-read - "
+                             "no ruling applies; nothing was consumed.\n")
+        elif not push_ov:
+            # empty/whitespace ruling: NOT consumed, no override applies
+            sys.stderr.write("ADVERSARY PUSH GUARD: EMPTY PUSH_OVERRIDE ignored - "
+                             "write the ruling text into .adversary/PUSH_OVERRIDE; "
+                             "the file was NOT consumed and no override applies.\n")
+        else:
+            try:
+                os.remove(_pov)
+            except OSError as _e:
+                # one-shot must not silently degrade (round-1 LOW)
+                sys.stderr.write("ADVERSARY PUSH GUARD: WARNING - PUSH_OVERRIDE "
+                                 "could NOT be deleted (%s); the ruling REMAINS "
+                                 "ARMED for later pushes - delete the file after "
+                                 "this push.\n" % str(_e)[:120])
+            try:
+                _po_log = os.path.join(_adv_dir(root), "push_overrides.json")
+                _rows = []
+                if os.path.isfile(_po_log):
+                    _rows = json.loads(open(_po_log, encoding="utf-8").read() or "[]")
+                if not isinstance(_rows, list):
+                    _rows = []          # gate WARN LOW: a valid-JSON non-list
+                                        # must never abort the push after the
+                                        # ruling was consumed
+                _rows.append({"when": datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
+                              "remote": remote, "reason": push_ov})
+                _tmp = _po_log + ".tmp"
+                open(_tmp, "w", encoding="utf-8").write(json.dumps(_rows, indent=1))
+                os.replace(_tmp, _po_log)
+            except (OSError, ValueError, AttributeError):
+                pass                    # the audit trail must never block the
+                                        # owner's ruling
+            sys.stderr.write("ADVERSARY PUSH GUARD: OWNER PUSH OVERRIDE consumed - "
+                             "content barriers downgrade to warnings for this push; "
+                             "un-notarized history still refuses. Ruling: %.160s\n"
+                             % push_ov)
     baseline = None
     bp = os.path.join(root, ".githooks", "adversary_baseline")
     if os.path.isfile(bp):
@@ -4046,7 +5086,8 @@ def cmd_check_push(remote):
         # the secret barrier runs BEFORE the note audit so a secret is reported even on
         # notarized history (EV-046); `remote_known` stays honest - with the tip unknown the
         # recipe keeps warning that listed commits may already be published elsewhere
-        if _push_secret_barrier(lref, revs, anchors, remote_known, doc_revs):
+        if _push_secret_barrier(lref, revs, anchors, remote_known, doc_revs,
+                                owner_override=push_ov):
             return 1
         boundaries = _shallow_boundaries()
         bad = []
@@ -4068,6 +5109,29 @@ def cmd_check_push(remote):
                 "a wrong baseline is an installer problem, re-run install_gate.py. "
                 "Otherwise: clear and re-commit, or the owner rules.\n\n"
                 % (lref, "".join("  %s\n" % b for b in bad)))
+            return 1
+        # DAILY-DOCKET GATE (owner order 2026-10-13, "flip all three"): a tier-1
+        # CLEAR is only SHIPPABLE once its tier-2 batch audit resolves. Refuse the
+        # push while an outgoing commit's tree still has a QUEUED audit (never
+        # drained) or an unresolved audit BLOCK. WARN audits land by design;
+        # commits with no audit entry (tier-2 interactive / docs-only / catalog-
+        # coupled gate-suite commits) are not batch-audited by exclusion.
+        ship_blocks = _unshippable_audits(root, revs)
+        if ship_blocks and push_ov:
+            sys.stderr.write("ADVERSARY PUSH GUARD: OWNER PUSH OVERRIDE - %d outgoing commit(s) "
+                             "not tier-2-batch-cleared; the owner's ruling lets this push "
+                             "through with a WARNING:\n%s\n"
+                             % (len(ship_blocks), "".join("  %s\n" % b for b in ship_blocks)))
+            ship_blocks = []
+        if ship_blocks:
+            sys.stderr.write(
+                "\nADVERSARY PUSH GUARD: push of %s REFUSED - outgoing commit(s) "
+                "are not tier-2-batch-cleared (owner order 2026-10-13: code is not "
+                "shippable until the daily-docket audit resolves):\n%s\nRun "
+                "`python adversary_gate.py audit-drain` (or wait for the periodic "
+                "drain) and address any BLOCK with a fix-forward commit. A queued "
+                "audit needs no action - it only needs to RUN.\n\n"
+                % (lref, "".join("  %s\n" % b for b in ship_blocks)))
             return 1
         audited_a_ref = True
     if audited_a_ref and _git_ok(["rev-parse", "--verify", "--quiet", NOTES_REF]):
@@ -4440,7 +5504,10 @@ def main(argv=None):
     rec = sub.add_parser("record")
     rec.add_argument("--ref", default=NOTES_REF)
     cp = sub.add_parser("check-push")
-    cp.add_argument("remote")
+    # git appends the hook event argv (remote, url) AFTER the launch command;
+    # a pre-2026-10-14 live config entry also expanded a literal "$1" to an
+    # EMPTY first arg - accept any count and normalize in the dispatch below.
+    cp.add_argument("hook_args", nargs="*")
     ex = sub.add_parser("explain",
                         help="why is one file unreviewed/stale? prints its clearance row + artifact head")
     ex.add_argument("path")
@@ -4452,6 +5519,11 @@ def main(argv=None):
     ad = sub.add_parser("audit-drain",
                         help="drain queued tier-1 batch audits (post-hoc; never blocks commits)")
     ad.add_argument("--limit", type=int, default=4)
+    rsr = sub.add_parser("recurrence-screen",
+                         help="screen a repo against the centralized "
+                              "recurrence lessons (working-tree read; the "
+                              "commit gate screens the index state)")
+    rsr.add_argument("--repo", default=os.getcwd())
     a = ap.parse_args(argv)
     if a.cmd == "check":
         return cmd_check(auto_review=True)
@@ -4462,13 +5534,17 @@ def main(argv=None):
     if a.cmd == "record":
         return cmd_record(a.ref)
     if a.cmd == "check-push":
-        return cmd_check_push(a.remote)
+        _push_argv = [x for x in a.hook_args if x]   # "" (expanded "$1") dropped;
+        # first non-empty is the remote git appended, second is its url
+        return cmd_check_push(_push_argv[0] if _push_argv else "")
     if a.cmd == "explain":
         return cmd_explain(a.path)
     if a.cmd == "costs":
         return cmd_costs(a.days)
     if a.cmd == "audit-drain":
         return cmd_audit_drain(a.limit)
+    if a.cmd == "recurrence-screen":
+        return cmd_recurrence_screen(["--repo", a.repo])
     return cmd_write_review_status(a.write_review) if a.write_review else cmd_status()
 
 

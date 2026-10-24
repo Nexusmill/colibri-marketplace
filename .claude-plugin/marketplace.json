@@ -10,7 +10,7 @@
       "name": "adversary-gate",
       "source": "./plugins/adversary-gate",
       "description": "A mandatory adversarial commit gate: no code commit without an independent external model's VERDICT CLEAR keyed to the exact staged bytes; durable git-notes evidence; push guard; CI re-audit. Arms via hooksPath installers or git 2.54+ config hooks (config_hooks.py); SHIPS the certified-generation runtime, layout-derived so the same bytes run at the author suite and in this plugin tree. Detection is the guarantee.",
-      "version": "0.3.8",
+      "version": "0.3.9",
       "author": {
         "name": "Nexusmill"
       },

@@ -23,6 +23,7 @@ with open(os.path.join(_ISO_DIR, "gitconfig"), "w", encoding="utf-8") as _f:
 os.environ["GIT_CONFIG_GLOBAL"] = os.path.join(_ISO_DIR, "gitconfig")
 os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
 SUITE_FILES = ("install_gate.py", "adversary_gate.py", "adversary_audit.py",
+               "runtime_loader.py", "enforcement_runtime.py",
                "pre-commit", "post-commit", "pre-push")
 DISPATCHER_FILES = ("pre-commit", "post-commit", "pre-push", ".gitattributes")
 
@@ -37,7 +38,9 @@ def suite_copy():
         shutil.copy(os.path.join(ORIG, fn), os.path.join(d, fn))
     os.makedirs(os.path.join(d, "hooks"))
     for fn in DISPATCHER_FILES:
-        shutil.copy(os.path.join(ORIG, "hooks", fn), os.path.join(d, "hooks", fn))
+        template = os.path.join(ORIG, "dispatchers", fn)
+        shutil.copy(template if os.path.isfile(template) else os.path.join(ORIG, "hooks", fn),
+                    os.path.join(d, "hooks", fn))
     subprocess.run([GIT, "init", "-q", d], capture_output=True)
     for k, v in (("user.email", "t@t"), ("user.name", "t"), ("core.autocrlf", "false")):
         subprocess.run([GIT, "-C", d, "config", k, v], capture_output=True)
@@ -50,6 +53,29 @@ def suite_copy():
                           capture_output=True, text=True)
     if p.returncode != 0 or head.returncode != 0:
         raise SystemExit("suite_copy: fixture commit failed - %s" % (p.stdout + p.stderr)[:300])
+    # Isolated installed-generation fixture for the new dispatchers. This is not
+    # production installation or independent review evidence. No owner runtime is touched.
+    from pathlib import Path
+    from enforcement_runtime import CATALOG, write_generation
+    control = Path(d) / ".adversary/runtime"
+    payload = {name: (Path(ORIG).parent / name).read_bytes() for name in CATALOG}
+    manifest = write_generation(control, "f" * 40, payload)
+    (control / "launch.py").write_bytes(payload["adversary-gate/runtime_loader.py"])
+    import json
+    # reshape the fixture generation to THIS copy's layout: write_generation
+    # baked the canonical Tools/adversary-gate shape because this selftest
+    # imports enforcement_runtime from ORIG, while the copy's own loader
+    # derives segment = the temp parent and gate dir = this dir's own name -
+    # a canonical-shaped package in a flat copy is one NO relocated loader
+    # can dispatch (the pre-fix installed_hook_blocks/allows failures)
+    seg = os.path.basename(os.path.dirname(os.path.realpath(d)))
+    gate = os.path.basename(d)
+    gen = control / "generations" / ("f" * 40)
+    os.rename(gen / "Tools", gen / seg)
+    os.rename(gen / seg / "adversary-gate", gen / seg / gate)
+    manifest["files"] = {k.replace("adversary-gate/", gate + "/", 1): v
+                         for k, v in manifest["files"].items()}
+    (control / "active.json").write_text(json.dumps(manifest), encoding="utf-8")
     return d
 
 
@@ -93,6 +119,44 @@ def fresh_repo():
     return tmp
 
 
+def copy_installed_fixture(destination):
+    """Relocation ships the complete installed package, not just mutable scripts.
+    The generation package is RESHAPED to the destination's own layout (segment
+    = the destination's parent dir name, gate dir = the destination's own name)
+    and the manifest keys rewritten to match: the runtime's validation is
+    layout-derived (runtime_loader AND install_gate._runtime_state), so a
+    relocated package must be consistent with where it now lives - the
+    author-suite layout (Tools/adversary-gate) only exists at the author suite.
+    The pre-reshape fixture rode the old _runtime_state hardcode into shipping
+    runtime packages no relocated loader could actually dispatch (gate round
+    2026-10-23: rows installed_hook_blocks/allows failed with 'Installed
+    enforcement refused')."""
+    import json as _json
+    shutil.copy(os.path.join(HERE, "runtime_loader.py"), os.path.join(destination, "runtime_loader.py"))
+    shutil.copytree(os.path.join(HERE, ".adversary", "runtime"),
+                    os.path.join(destination, ".adversary", "runtime"))
+    rt = os.path.join(destination, ".adversary", "runtime")
+    act = os.path.join(rt, "active.json")
+    manifest = _json.load(open(act, encoding="utf-8"))
+    seg_new = os.path.basename(os.path.dirname(os.path.realpath(destination)))
+    gate_new = os.path.basename(os.path.realpath(destination))
+    gen = os.path.join(rt, "generations", manifest["commit"])
+    # tolerant of ANY current shape (the copied runtime may already carry a
+    # suite_copy-reshaped generation): find the segment dir that exists, and
+    # the gate-dir name from the manifest's own keys
+    cur_seg = next((n for n in os.listdir(gen)
+                    if os.path.isdir(os.path.join(gen, n))), None)
+    old_gate = next(iter(manifest["files"]), "").split("/", 1)[0] or "adversary-gate"
+    if cur_seg and cur_seg != seg_new:
+        os.rename(os.path.join(gen, cur_seg), os.path.join(gen, seg_new))
+    gd = os.path.join(gen, seg_new)
+    if old_gate != gate_new and os.path.isdir(os.path.join(gd, old_gate)):
+        os.rename(os.path.join(gd, old_gate), os.path.join(gd, gate_new))
+        manifest["files"] = {k.replace(old_gate + "/", gate_new + "/", 1): v
+                             for k, v in manifest["files"].items()}
+    _json.dump(manifest, open(act, "w", encoding="utf-8"))
+
+
 def canon_shim(name):
     """Expected installed bytes for a shim: LF-normalized template with the GATE= line
     substituted to THIS directory's gate - mirroring install_gate._canonical_shim."""
@@ -112,6 +176,8 @@ def main():
 
     # 2. install arms: exit 0, hooksPath set, shim bytes == canonical (LF)
     r = run([INSTALLER, tmp])
+    if r.returncode != 0:
+        raise SystemExit("initial installed fixture failed: " + r.stdout + r.stderr)
     hp = git(tmp, "config", "core.hooksPath").stdout.strip()
     shim_path = os.path.join(tmp, ".githooks", "pre-commit")
     shim = open(shim_path, "rb").read() if os.path.isfile(shim_path) else b""
@@ -332,6 +398,7 @@ def main():
     os.makedirs(os.path.join(fakedir, "hooks"))
     for fn in ("pre-commit", "post-commit", "pre-push"):
         shutil.copy(os.path.join(HERE, "hooks", fn), os.path.join(fakedir, "hooks", fn))
+    copy_installed_fixture(fakedir)
     tmp3 = fresh_repo()
     r = run([os.path.join(fakedir, "install_gate.py"), tmp3])
     check("failclosed_install_exit3", r.returncode == 3 and "FAIL-CLOSED" in r.stdout,
@@ -360,6 +427,11 @@ def main():
     for fn in ("pre-commit", "post-commit", "pre-push", ".gitattributes"):
         shutil.copy(os.path.join(HERE, "hooks", fn), os.path.join(reloc, "hooks", fn))
     r = run([os.path.join(reloc, "install_gate.py"), tmp5])
+    hp5 = git(tmp5, "config", "--local", "core.hooksPath", expect_ok=False).stdout.strip()
+    check("relocated_without_runtime_refused", r.returncode == 1 and hp5 == "",
+          "rc=%s hp=%r %s" % (r.returncode, hp5, r.stdout[:200]))
+    copy_installed_fixture(reloc)
+    r = run([os.path.join(reloc, "install_gate.py"), tmp5])
     shim5 = open(os.path.join(tmp5, ".githooks", "pre-commit"), encoding="utf-8").read()
     want_gate = 'GATE="%s"' % os.path.join(reloc, "adversary_gate.py").replace("\\", "/")
     check("relocated_install_functional", r.returncode == 0 and "ARMED" in r.stdout,
@@ -374,6 +446,33 @@ def main():
                        env=dict(os.environ, ADVERSARY_SELFTEST="1", ADVERSARY_MODEL=""))
     check("relocated_dispatcher_refuses_code_commit", r.returncode != 0
           and "ADVERSARY GATE" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-200:])
+
+    # 7c. PLUGIN-SHAPE relocated suite (marketplace-distribution contract):
+    #     the gate files live under <root>/tools/ (not <Tools>/adversary-gate/),
+    #     so the installed runtime's generation segment is the plugin root and
+    #     the gate dir is "tools". _runtime_state must derive BOTH from its own
+    #     location (like runtime_loader does) - the author-suite hardcode read a
+    #     nonexistent Tools/adversary-gate path, swallowed FileNotFoundError,
+    #     and the shipped installer could never arm (gate round 2026-10-23).
+    plug = tempfile.mkdtemp(prefix="advgate_plugin_")
+    proot = os.path.join(plug, "adversary-gate")     # plugin root = segment name
+    ptools = os.path.join(proot, "tools")            # gate dir name
+    os.makedirs(os.path.join(ptools, "hooks"))
+    for fn in ("install_gate.py", "adversary_gate.py", "adversary_audit.py",
+               "runtime_loader.py", "pre-commit", "post-commit", "pre-push"):
+        shutil.copy(os.path.join(HERE, fn), os.path.join(ptools, fn))
+    for fn in ("pre-commit", "post-commit", "pre-push", ".gitattributes"):
+        shutil.copy(os.path.join(HERE, "hooks", fn), os.path.join(ptools, "hooks", fn))
+    # the fixture itself reshapes the runtime to this layout (segment =
+    # "adversary-gate" plugin root, gate dir = "tools"); manifest keys follow
+    copy_installed_fixture(ptools)
+    tmp6 = fresh_repo()
+    r = run([os.path.join(ptools, "install_gate.py"), tmp6])
+    check("plugin_shape_install_functional", r.returncode == 0 and "ARMED" in r.stdout,
+          "rc=%s %s" % (r.returncode, r.stdout[:200]))
+    r = run([os.path.join(ptools, "install_gate.py"), tmp6, "--verify-only"])
+    check("plugin_shape_verify_armed", r.returncode == 0 and "ARMED" in r.stdout,
+          "rc=%s %s" % (r.returncode, r.stdout[:200]))
 
     # 8. a regular FILE named .githooks -> clean FAIL, no traceback
     tmp4 = fresh_repo()
@@ -542,7 +641,10 @@ def main():
     check("committed_dispatchers_verify_armed", r.returncode == 0 and "ARMED" in r.stdout,
           "rc=%s %s" % (r.returncode, r.stdout[:300]))
     pc = os.path.join(reloc, "hooks", "pre-commit")
-    neutered = open(pc, "rb").read().replace(b'"$PYBIN" "$GATE" check || exit $?', b"true")
+    original = open(pc, "rb").read()
+    neutered = original.replace(b'"$PYBIN" -I -B "$GATE" gate check || exit $?', b"true")
+    if neutered == original:
+        raise SystemExit("dispatcher tamper fixture did not change the installed gate command")
     with open(pc, "wb") as f:
         f.write(neutered)
     r = run([os.path.join(reloc, "install_gate.py"), tmp5, "--verify-only"], env_extra=iso)
@@ -616,6 +718,48 @@ def main():
     r = run([INSTALLER, tmpd, "--verify-only"], env_extra=iso)
     check("verify_agrees_crlf_is_unarmed", r.returncode == 1 and "UNARMED" in r.stdout,
           "rc=%s %s" % (r.returncode, r.stdout[:200]))
+
+    # 11. R2 visibility (2026-10-08): the suite's LIVE gate is the ACTIVE certified
+    #     generation, never the working tree - a failed activation leaves an older
+    #     generation serving every armed repo. The installer must WARN when HEAD has
+    #     moved past the active generation in certified bytes (docs-only drift stays
+    #     silent: no executable byte changed).
+    sys.path.insert(0, HERE)
+    import install_gate as _ig
+    import json as _json
+    active_path = os.path.join(HERE, ".adversary", "runtime", "active.json")
+    saved_active = open(active_path, encoding="utf-8").read()
+    first_head = subprocess.run([GIT, "-C", HERE, "rev-parse", "HEAD"],
+                                capture_output=True, text=True).stdout.strip()
+    _lag = getattr(_ig, "_runtime_lag", lambda: "MISSING")
+    check("runtime_lag_unknown_active_is_none", _lag() is None, repr(_lag()))
+    os.makedirs(os.path.join(HERE, "adversary-gate"), exist_ok=True)
+    with open(os.path.join(HERE, "adversary-gate", "adversary_gate.py"), "w",
+              encoding="utf-8") as f:
+        f.write("# lag fixture - a certified-catalog byte change\n")
+    subprocess.run([GIT, "-C", HERE, "add", "adversary-gate/adversary_gate.py"],
+                   capture_output=True)
+    subprocess.run([GIT, "-C", HERE, "commit", "-q", "--no-verify", "-m", "lag fixture"],
+                   capture_output=True)
+    lag_head = subprocess.run([GIT, "-C", HERE, "rev-parse", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+    manifest = _json.loads(saved_active)
+    manifest["commit"] = first_head
+    open(active_path, "w", encoding="utf-8").write(_json.dumps(manifest))
+    lag = _lag()
+    check("runtime_lag_reports_catalog_drift",
+          lag == (first_head[:12], lag_head[:12], 1), repr(lag))
+    r = run([INSTALLER, "--census", HERE], env_extra=iso)
+    check("census_warns_on_runtime_lag", "lags HEAD" in r.stdout, r.stdout[-200:])
+    open(os.path.join(HERE, "lag_note.md"), "w").write("docs only\n")
+    subprocess.run([GIT, "-C", HERE, "add", "lag_note.md"], capture_output=True)
+    subprocess.run([GIT, "-C", HERE, "commit", "-q", "--no-verify", "-m", "docs only"],
+                   capture_output=True)
+    manifest["commit"] = lag_head
+    open(active_path, "w", encoding="utf-8").write(_json.dumps(manifest))
+    lag2 = _lag()
+    check("runtime_lag_silent_on_docs_only_drift", lag2 is None, repr(lag2))
+    open(active_path, "w", encoding="utf-8").write(saved_active)
 
     bad = {k: v for k, v in results.items() if not v[0]}
     print("\n%d/%d PASS" % (len(results) - len(bad), len(results)))

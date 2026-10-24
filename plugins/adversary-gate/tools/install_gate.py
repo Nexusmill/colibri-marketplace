@@ -39,6 +39,7 @@ clearance; CLEAR lands + notarizes, BLOCK refuses; a code commit that lands sile
 means the hook did not run. Docs: colibri-code-review/docs/GATE_INSTALLER.md.
 """
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -69,7 +70,7 @@ DEFAULT_CENSUS_ROOTS = [
 ATTR_LINES = ("pre-commit text eol=lf", "post-commit text eol=lf",
               "pre-push text eol=lf",
               "adversary_audit.py text eol=lf", "adversary_baseline text eol=lf",
-              "adversary_rules_epoch text eol=lf")
+              "adversary_rules_epoch text eol=lf", "adversary_text_rules_epoch text eol=lf")
 
 
 def _git(repo, *args):
@@ -199,6 +200,41 @@ def _dispatchers_state():
     return "canonical"
 
 
+def _runtime_state():
+    """A dispatcher using the installed launcher is functional only with valid bytes."""
+    pre = os.path.join(CANON_HOOKS_DIR, "pre-commit")
+    if not os.path.isfile(pre):
+        return "legacy-source"
+    with open(pre, "rb") as stream:
+        if b".adversary/runtime/launch.py" not in stream.read():
+            return "legacy-source"
+    try:
+        import json
+        from pathlib import Path
+        from runtime_loader import unaliased, validate_generation
+        control = Path(HERE) / ".adversary/runtime"
+        manifest = json.loads(unaliased(control / "active.json").read_text(encoding="utf-8"))
+        validate_generation(control, manifest)
+        launcher = unaliased(control / "launch.py").read_bytes()
+        # layout-derived like runtime_loader itself (gate round 2026-10-23,
+        # marketplace 0.3.9 review): the generation segment is the name of
+        # the dir CONTAINING this gate dir ("Tools" at the author suite,
+        # the plugin root in a distribution) and the gate dir is this
+        # script's own dir ("adversary-gate" | "tools" | ...). The old
+        # hardcoded Tools/adversary-gate path read a nonexistent file in
+        # every relocated distribution, swallowed FileNotFoundError, and
+        # reported the valid runtime "invalid" - the shipped plugin
+        # installer could never arm.
+        here = Path(HERE).resolve()
+        package = (control / "generations" / manifest["commit"]
+                   / here.parent.name)
+        if launcher != (package / here.name / "runtime_loader.py").read_bytes():
+            return "invalid"
+        return "verified " + manifest["commit"]
+    except Exception:
+        return "invalid"
+
+
 def _dangling(hp, root):
     """An arming value that resolves to NOTHING in this checkout: a relative dir that does not
     exist here (worktrees on pre-vendoring branches - probe 2026-09-06) or an absolute dir
@@ -266,6 +302,42 @@ def _epoch_state(root):
     return sha, "ok", adds
 
 
+def _text_epoch_state(root):
+    """Read the same committed ancestry boundary as the standalone auditor."""
+    import adversary_audit
+    sha, state = adversary_audit._epoch_uncached(
+        root, "text-files", adversary_audit.TEXT_RULES_EPOCH_FILE)
+    if state == "uncommitted":
+        path = os.path.join(root, adversary_audit.TEXT_RULES_EPOCH_FILE)
+        if not os.path.lexists(path):
+            state = "none"
+        elif os.path.islink(path) or not os.path.isfile(path):
+            state = "unreadable"
+        else:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            if not re.fullmatch(r"text-files (?:ROOT|[0-9a-f]{40}|[0-9a-f]{64})\n?", text):
+                state = "unreadable"
+    return sha, state
+
+
+def _write_text_epoch(root):
+    """Activate the new text rule once, without moving either existing history boundary."""
+    import adversary_audit
+    path = os.path.join(root, adversary_audit.TEXT_RULES_EPOCH_FILE)
+    if os.path.lexists(path):
+        return
+    # A deleted working copy must restore the committed anchor, never activate a later one.
+    rc_blob, blob = adversary_audit._git(
+        root, ["show", "HEAD:" + adversary_audit.TEXT_RULES_EPOCH_FILE.replace("\\", "/")],
+        binary=True, check=False)
+    rc, head, _ = _git(root, "rev-parse", "--verify", "HEAD")
+    anchor = head if rc == 0 and head else "ROOT"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "xb") as f:
+        f.write(blob if rc_blob == 0 else ("text-files " + anchor + "\n").encode("ascii"))
+
+
 def _assess(root, canon, canon_post, canon_prepush, canon_aud):
     """ONE judgement of a checkout, shared by --verify-only and --census so the two reporters
     can never disagree (gate rounds 2-3). Returns a dict; `state` is one of:
@@ -280,6 +352,21 @@ def _assess(root, canon, canon_post, canon_prepush, canon_aud):
     hp, shim_state = _state(root, canon)
     gv = _global_hooks_value()
     eff = hp or gv
+    # Config-hooks arming (owner order 2026-10-11 machine-wide migration): with
+    # no hooksPath in effect, the gate may be armed via git 2.54+ config-hook
+    # entries (verified exact-command by the config_hooks module). The hook
+    # layer then rides the certified runtime, which validates its own
+    # generation on every run; layer 3 (notary baseline/rewriteRef) still
+    # applies unchanged.
+    cfg_armed = False
+    if not eff:
+        try:
+            sys.path.insert(0, HERE)
+            import config_hooks
+            cfg_armed = len(config_hooks.arming(
+                root, suite=os.path.dirname(HERE))) >= len(config_hooks._entries(os.path.dirname(HERE)))
+        except Exception:
+            cfg_armed = False
     post_state = _bytes_state(root, "post-commit", canon_post)
     prepush_state = _bytes_state(root, "pre-push", canon_prepush)
     aud_state = _bytes_state(root, "adversary_audit.py", canon_aud)
@@ -290,22 +377,27 @@ def _assess(root, canon, canon_post, canon_prepush, canon_aud):
     _, rref, _ = _git(root, "config", "notes.rewriteRef")
     _, rmode, _ = _git(root, "config", "notes.rewriteMode")
     rref_ok = rref == NOTES_REF and rmode == "ignore"   # a concatenating rebase corrupts notes: stale
+    text_sha, text_state = _text_epoch_state(root)
+    text_ok = (b"TEXT_RULES_EPOCH_FILE" not in canon_aud or text_state in ("ok", "uncommitted"))
     layer3 = (post_state == "canonical" and prepush_state == "canonical"
-              and aud_state == "canonical" and base_ok and rref_ok)
+              and aud_state == "canonical" and base_ok and rref_ok and text_ok)
     dangling = _dangling(eff, root)
     # the dispatchers this checkout would EXECUTE (only when the pin names our canonical dir)
     # must match their committed blobs - a working-tree edit there is 'tampered', never armed
     disp = _dispatchers_state() if _is_canonical_dir(eff) else "n/a"
+    runtime = _runtime_state() if _is_canonical_dir(eff) else "n/a"
     tampered = disp == "tampered"
     # A PRESENT vendored shim must still be canonical bytes (birth-review r5): the canonical
     # dir carries the arming ONLY when .githooks/ is absent here (pre-vendoring branch).
     vendored_absent = _is_canonical_dir(eff) and shim_state == "absent"
-    hook_layer = _hooks_equivalent(eff, root) and not dangling and not tampered and (
-        shim_state == "canonical" or vendored_absent)
-    armed = hook_layer and (layer3 or (vendored_absent and rref_ok))
+    hook_layer = (_hooks_equivalent(eff, root) and not dangling and not tampered and (
+        shim_state == "canonical" or vendored_absent)) if eff else cfg_armed
+    armed = hook_layer and runtime != "invalid" and (layer3 or ((vendored_absent or cfg_armed) and rref_ok))
     # dangling before overridden: a value that resolves to NOTHING is the actionable fact
     # whatever it was meant to be (gate round 4 LOW - a deleted relocated suite's pin)
-    if not eff:
+    if not eff and cfg_armed:
+        state = "armed" if armed else "stale"
+    elif not eff:
         state = "unset"
     elif dangling:
         state = "dangling"
@@ -321,7 +413,8 @@ def _assess(root, canon, canon_post, canon_prepush, canon_aud):
             "prepush_state": prepush_state, "aud_state": aud_state, "base_ok": base_ok,
             "rref": rref, "rmode": rmode, "rref_ok": rref_ok, "layer3": layer3, "dangling": dangling,
             "vendored_absent": vendored_absent, "hook_layer": hook_layer, "armed": armed,
-            "dispatchers": disp, "state": state}
+            "dispatchers": disp, "runtime": runtime, "state": state, "cfg_armed": cfg_armed,
+            "text_epoch_sha": text_sha, "text_epoch_state": text_state}
 
 
 def _warn(msg):
@@ -406,6 +499,39 @@ def _checkouts_under(roots):
     return out
 
 
+def _runtime_lag():
+    """R2 visibility (2026-10-08): the suite's LIVE gate is the ACTIVE CERTIFIED
+    GENERATION (adversary-gate/.adversary/runtime/active.json), never the working
+    tree - a failed activation leaves an older generation serving every armed
+    repo while the source says otherwise (that is how a full day ran on the
+    retired model chain). Returns (active12, head12, changed_count) when HEAD
+    has moved past the active generation IN CERTIFIED BYTES, else None;
+    docs-only drift does not count (no executable byte changed)."""
+    try:
+        import enforcement_runtime
+    except ImportError:
+        return None
+    active = os.path.join(HERE, ".adversary", "runtime", "active.json")
+    if not os.path.isfile(active):
+        return None
+    try:
+        commit = json.loads(open(active, encoding="utf-8").read()).get("commit")
+    except (ValueError, OSError):
+        return None
+    rc, root, _ = _git(HERE, "rev-parse", "--show-toplevel")
+    if rc != 0:
+        return None
+    rc, head, _ = _git(root, "rev-parse", "HEAD")
+    head = head.strip()
+    if rc != 0 or not commit or head == commit:
+        return None
+    rc, diff, _ = _git(root, "diff", "--name-only", commit, head, "--",
+                       *enforcement_runtime.CERTIFIED_CATALOG)
+    if rc != 0 or not diff.strip():
+        return None
+    return (commit[:12], head[:12], len(diff.splitlines()))
+
+
 def census(roots):
     """One row per checkout, judged by the SAME _assess() as --verify-only (gate round 3: the
     two reporters must agree on byte state too). state: armed | stale | dangling | unset |
@@ -422,10 +548,12 @@ def census(roots):
         s = _assess(root, canon, canon_post, canon_prepush, canon_aud)
         _, head, _ = _git(root, "rev-parse", "--short", "HEAD")
         _, br, _ = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
-        src = "local" if s["hp"] else ("global" if s["gv"] else "none")
+        src = ("local" if s["hp"] else ("global" if s["gv"]
+               else ("config-hooks" if s.get("cfg_armed") else "none")))
         rows.append({"path": root, "kind": "worktree" if _is_worktree(root) else "clone",
                      "head": head or "-", "branch": br or "-", "state": s["state"],
-                     "value": s["eff"], "source": src})
+                     "value": s["eff"] or ("git-config hook.* (config-hooks)" if s.get("cfg_armed") else ""),
+                     "source": src})
     return rows
 
 
@@ -460,6 +588,12 @@ def main(argv=None):
                 r["state"], r["kind"], r["head"], r["branch"][:28], r["path"],
                 "" if r["state"] == "armed" else
                 "   [%s value: %s]" % (r["source"], r["value"] or "(none)")))
+        lag = _runtime_lag()
+        if lag:
+            print("census: WARNING - the suite's LIVE gate lags HEAD in certified bytes: "
+                  "active generation %s vs HEAD %s (%d catalog file(s) changed) - run "
+                  "'python -I -B adversary-gate/.adversary/runtime/launch.py activate' "
+                  "outside any hook" % lag)
         bad = [r for r in rows if r["state"] != "armed"]
         print("\ncensus: %d checkout(s), %d not armed (global hooksPath: %s)"
               % (len(rows), len(bad), _global_hooks_value() or "(unset)"))
@@ -524,6 +658,7 @@ def main(argv=None):
                                                 else "(unset)")))
         print("  global hooksPath : %s" % (gv or "(unset)"))
         dstate = _dispatchers_state()
+        print("  enforcement runtime : %s" % s["runtime"])
         print("  dispatchers    : %s" % {
             "canonical": "canonical at %s (tracked, identical to the committed blobs)" % CANON_HOOKS_DIR,
             "tampered": "TAMPERED at %s (differs from the committed blob or untracked - every "
@@ -556,6 +691,8 @@ def main(argv=None):
         print("  post-commit    : %s" % s["post_state"])
         print("  pre-push       : %s" % s["prepush_state"])
         print("  auditor        : %s" % s["aud_state"])
+        print("  text epoch     : %s (%s)" % (s["text_epoch_state"], s["text_epoch_sha"] or
+                                              "current text rule applies everywhere"))
         print("  baseline       : %s" % ("present" if s["base_ok"] else "ABSENT (tripwire "
                                          "cannot anchor - re-run the installer)"))
         print("  rewriteRef     : %s" % (s["rref"] or "(unset - rebases will orphan notes)"))
@@ -587,6 +724,11 @@ def main(argv=None):
               "untracked) - pinning it would execute unreviewed bytes in this repo. Commit the "
               "dispatcher through the gate (Tools repo) first, or restore it (git checkout)."
               % CANON_HOOKS_DIR)
+        return 1
+
+    if _runtime_state() == "invalid":
+        print("FAIL: installed enforcement runtime is missing or invalid; restore a CLEAR-reviewed "
+              "runtime before pinning this dispatcher directory.")
         return 1
 
     # -------- conflicts that need a conscious decision, not a silent overwrite
@@ -674,6 +816,8 @@ def main(argv=None):
         with open(epoch_path, "wb") as f:
             f.write((have_epoch + ("" if not have_epoch or have_epoch.endswith("\n") else "\n")
                      + "hook-names " + anchor + "\n").encode("utf-8"))
+    if b"TEXT_RULES_EPOCH_FILE" in canon_aud:
+        _write_text_epoch(root)
     # rebases/amends must carry notes to the rewritten commits, or every rebase would
     # orphan its clearances and the auditor would false-alarm on reviewed content
     rc, _, err = _git(root, "config", "notes.rewriteRef", NOTES_REF)

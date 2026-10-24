@@ -28,17 +28,20 @@ DEFAULT_SUITE = os.path.dirname(_GATE_DIR_PATH)
 _PY = sys.executable or "python3"
 
 EVENTS = ("pre-commit", "post-commit", "pre-push")
-# The exact invocations the hookdir shims make (round gate_20261011-063610
-# HIGH: guessed args broke notarization and pushed): pre-commit -> gate
+# The exact invocations for the config-hook entries: pre-commit -> gate
 # check; post-commit -> gate record (NO positional - argparse rejects one)
 # plus a SEPARATE activate entry (the shim runs both); pre-push -> gate
-# check-push "$1" (config hooks receive the event argv AND the stdin
-# ref-lines - empirically proven, junk/probe_pushhook2.py).
+# check-push (git APPENDS the event argv - remote, url - AFTER the command,
+# and the stdin ref-lines arrive on stdin; a literal "$1" in the command
+# expands EMPTY through the shell while the real remote/url land as EXTRA
+# argv, breaking argparse - live-proven 2026-10-14, junk/prepush_driver.py;
+# the gate parser additionally tolerates the empty-leading-remote shape of
+# not-yet-corrected live entries).
 _EVENT_ARGS = {
     "adversary-pre-commit": ("pre-commit", ["gate", "check"]),
     "adversary-post-commit": ("post-commit", ["gate", "record"]),
     "adversary-activate": ("post-commit", ["activate"]),
-    "adversary-pre-push": ("pre-push", ["gate", "check-push", '"$1"']),
+    "adversary-pre-push": ("pre-push", ["gate", "check-push"]),
 }
 
 
@@ -73,6 +76,18 @@ def _entries(suite):
     return out
 
 
+def _command_matches(live, expected_cmd):
+    """Exact-byte comparison with ONE legacy tolerance (round 133017 finding 2):
+    entries written before 2026-10-14 embed a hookdir-style literal '"$1"'
+    token that the shell expands EMPTY while git appends the real argv after
+    the command - functionally equivalent since the gate parser tolerates the
+    shape, so exactly that one trailing token is accepted. Anything else that
+    differs is still foreign (round gate_20261011-055123: substring tests
+    counted commands that merely MENTION the certified path)."""
+    live = (live or "").strip()
+    return live == expected_cmd or live == expected_cmd + ' "$1"'
+
+
 def arming(repo, suite=DEFAULT_SUITE):
     """The gate's armed config-hook entries across ALL scopes:
     [(scope, name, event, command)] where the command binds this suite's
@@ -94,7 +109,7 @@ def arming(repo, suite=DEFAULT_SUITE):
             if rc_ev != 0 or event not in (evs or "").splitlines():
                 continue
             cmd = _git(repo, "config", scope, "--get", "hook.%s.command" % name)[1]
-            if not cmd or cmd.strip() != expected[name]:
+            if not cmd or not _command_matches(cmd, expected[name]):
                 continue
             found.append((scope.lstrip("-"), name, event, cmd))
     return found
@@ -138,7 +153,7 @@ def arm(repo, suite=DEFAULT_SUITE, force=False):
                 broken_broader.append("%s %s (no command)" % (scope.lstrip("-"), name))
                 continue
             expected = {n: c for n, _e, c in _entries(suite)}[name]
-            if cmd.strip() != expected:
+            if not _command_matches(cmd, expected):
                 # a command that is not EXACTLY ours (round gate_20261011-055123:
                 # substring matches counted commands that merely mention the
                 # certified path while invoking something else)
@@ -299,9 +314,10 @@ def disarm(repo, suite=DEFAULT_SUITE):
             cmd = _git(repo, "config", scope, "--get", "hook.%s.command" % name)[1]
             # only EXACTLY-our entries block the disarm (a commandless or
             # foreign command arms nothing of ours - rounds
-            # gate_20261010-235540 + gate_20261011-055810)
+            # gate_20261010-235540 + gate_20261011-055810); the '"$1"' legacy
+            # token tolerance is _command_matches (round 133017 finding 2)
             expected = {n: c for n, _e, c in _entries(suite)}[name]
-            if not cmd or cmd.strip() != expected:
+            if not cmd or not _command_matches(cmd, expected):
                 continue
             surviving.append("%s %s" % (scope, name))
     if surviving:
